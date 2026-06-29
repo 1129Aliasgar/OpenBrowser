@@ -1,8 +1,10 @@
 import { parse as parseJsonc } from 'jsonc-parser';
 import { validateAIResponse, formatValidationError, type AIResponsePayload, type Operation } from '../protocol/index.js';
 import {
+  detectCopyPasteBlocks,
   extractFileBlocks,
   mergeFileBlocksIntoOperations,
+  normalizeOperationTextFields,
   validateMergedFileOperations,
 } from './markdown-agent.js';
 import { FileOperation } from '../core/types/index.js';
@@ -33,11 +35,18 @@ export function parseAIResponse(
     throw new Error(formatValidationError(error));
   }
 
+  const copyPasteError = detectCopyPasteBlocks(raw);
+  if (copyPasteError) {
+    throw new Error(copyPasteError);
+  }
+
   const fileBlocks = extractFileBlocks(raw);
-  const mergedOps = mergeFileBlocksIntoOperations(
-    (validated.operations ?? []) as unknown as FileOperation[],
-    fileBlocks,
-    raw,
+  const mergedOps = normalizeOperationTextFields(
+    mergeFileBlocksIntoOperations(
+      (validated.operations ?? []) as unknown as FileOperation[],
+      fileBlocks,
+      raw,
+    ),
   );
   validateMergedFileOperations(mergedOps);
 
@@ -82,25 +91,129 @@ function buildJsonCandidates(extracted: string): string[] {
 
 function extractJsonFromText(raw: string): string {
   const trimmed = stripJsonFence(raw).trim();
+  const candidates = findAllJsonObjects(trimmed);
+
+  let best: string | null = null;
+  let bestScore = -1;
+
+  for (const candidate of candidates) {
+    const score = scoreOperationsJson(candidate, trimmed);
+    if (score > bestScore) {
+      bestScore = score;
+      best = candidate;
+    }
+  }
+
+  if (best) {
+    return best;
+  }
+
   const start = trimmed.indexOf('{');
   if (start === -1) {
     return trimmed;
   }
 
+  const balanced = extractBalancedJson(trimmed, start);
+  return balanced ?? trimmed.slice(start);
+}
+
+function findAllJsonObjects(text: string): string[] {
+  const objects: string[] = [];
+
+  for (let index = 0; index < text.length; index += 1) {
+    if (text[index] !== '{') {
+      continue;
+    }
+
+    const json = extractBalancedJson(text, index);
+    if (!json) {
+      continue;
+    }
+
+    objects.push(json);
+    index += json.length - 1;
+  }
+
+  return objects;
+}
+
+function scoreOperationsJson(candidate: string, fullText: string): number {
+  try {
+    const parsed = parseJsonc(candidate) as {
+      operations?: unknown[];
+      conversationId?: string;
+    };
+
+    if (!Array.isArray(parsed.operations) || parsed.operations.length === 0) {
+      return -1;
+    }
+
+    const validCount = parsed.operations.filter(
+      (operation) =>
+        operation &&
+        typeof operation === 'object' &&
+        typeof (operation as { action?: unknown }).action === 'string',
+    ).length;
+
+    if (validCount === 0) {
+      return -1;
+    }
+
+    let score = validCount * 100;
+    if (parsed.conversationId) {
+      score += 10;
+    }
+
+    const position = fullText.lastIndexOf(candidate);
+    if (position >= 0) {
+      score += Math.min(50, Math.floor(position / 100));
+    }
+
+    return score;
+  } catch {
+    return -1;
+  }
+}
+
+function extractBalancedJson(text: string, start: number): string | null {
   let depth = 0;
-  for (let index = start; index < trimmed.length; index += 1) {
-    const char = trimmed[index];
+  let inString = false;
+  let escaped = false;
+
+  for (let index = start; index < text.length; index += 1) {
+    const char = text[index];
+
+    if (inString) {
+      if (escaped) {
+        escaped = false;
+        continue;
+      }
+      if (char === '\\') {
+        escaped = true;
+        continue;
+      }
+      if (char === '"') {
+        inString = false;
+      }
+      continue;
+    }
+
+    if (char === '"') {
+      inString = true;
+      continue;
+    }
+
     if (char === '{') {
       depth += 1;
     } else if (char === '}') {
       depth -= 1;
       if (depth === 0) {
-        return trimmed.slice(start, index + 1);
+        return text.slice(start, index + 1);
       }
     }
   }
 
-  return trimmed.slice(start);
+  return null;
 }
 
 function stripJsonFence(raw: string): string {

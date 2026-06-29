@@ -4,6 +4,7 @@ import { promisify } from 'node:util';
 import { createPatch } from 'diff';
 import fs from 'fs-extra';
 import type { FileOperation } from '../core/index.js';
+import { normalizeMultilineText } from '../parser/markdown-agent.js';
 import { appendHistory } from '../memory/index.js';
 
 const execAsync = promisify(exec);
@@ -222,18 +223,25 @@ function nextContent(operation: FileOperation, before: string): string {
     operation.endLine !== undefined &&
     operation.replace !== undefined
   ) {
-    return applyLineEdit(before, operation.startLine, operation.endLine, operation.replace);
+    return applyLineEdit(
+      before,
+      operation.startLine,
+      operation.endLine,
+      normalizeMultilineText(operation.replace),
+    );
   }
 
   if (operation.search !== undefined && operation.replace !== undefined) {
-    if (!before.includes(operation.search)) {
+    const search = normalizeMultilineText(operation.search);
+    const replace = normalizeMultilineText(operation.replace);
+    if (!before.includes(search)) {
       throw new Error(`Search text not found in ${operation.path}`);
     }
-    return before.replace(operation.search, operation.replace);
+    return before.replace(search, replace);
   }
 
   if (operation.content !== undefined) {
-    return operation.content;
+    return normalizeMultilineText(operation.content);
   }
 
   throw new Error(`${operation.action} requires content, line edit, or search/replace`);

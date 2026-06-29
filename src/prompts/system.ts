@@ -1,5 +1,8 @@
 import type { SessionMode } from '../server/session-store.js';
 
+const OB_FILE_BEGIN = '---OB_FILE_BEGIN:';
+const OB_FILE_END = '---OB_FILE_END---';
+
 const HYBRID_EXPRESS_EXAMPLE = `{
   "operations": [
     { "action": "RUN_COMMAND", "command": "npm init -y && npm install express" },
@@ -13,7 +16,7 @@ const HYBRID_EXPRESS_EXAMPLE = `{
   "conversationId": "<uuid-v4>"
 }
 
-\`\`\`file:package.json
+${OB_FILE_BEGIN} package.json---
 {
   "name": "express-app",
   "version": "1.0.0",
@@ -25,17 +28,17 @@ const HYBRID_EXPRESS_EXAMPLE = `{
     "express": "^5.1.0"
   }
 }
-\`\`\`
+${OB_FILE_END}
 
-\`\`\`file:src/controllers/userController.js
+${OB_FILE_BEGIN} src/controllers/userController.js---
 const users = [{ id: 1, name: 'Alice' }];
 
 exports.listUsers = (_req, res) => {
   res.json(users);
 };
-\`\`\`
+${OB_FILE_END}
 
-\`\`\`file:src/routes/userRoutes.js
+${OB_FILE_BEGIN} src/routes/userRoutes.js---
 const express = require('express');
 const { listUsers } = require('../controllers/userController');
 
@@ -43,9 +46,9 @@ const router = express.Router();
 router.get('/', listUsers);
 
 module.exports = router;
-\`\`\`
+${OB_FILE_END}
 
-\`\`\`file:src/server.js
+${OB_FILE_BEGIN} src/server.js---
 const express = require('express');
 const userRoutes = require('./routes/userRoutes');
 
@@ -54,7 +57,7 @@ app.use('/users', userRoutes);
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(\`Server on \${PORT}\`));
-\`\`\``;
+${OB_FILE_END}`;
 
 const EDIT_EXISTING_EXAMPLE = `{
   "operations": [
@@ -95,32 +98,41 @@ export function buildAgentSystemPrompt(conversationId: string): string {
     '- Do NOT put file bodies inside JSON strings.',
     `- "conversationId" must be exactly: ${conversationId}`,
     '',
-    '### PART 2 — File content blocks',
-    '- One markdown fence per file: ```file:relative/path.ext',
-    '- Paste FULL source code inside each fence.',
-    '- Do NOT use ChatGPT/Gemini file attachment UI, canvas, or download cards.',
-    '- Do NOT paste bare code without ```file:path``` fences.',
+    '### PART 2 — OpenBrowser file blocks (plain text, NOT code fences)',
+    `- One block per file using ${OB_FILE_BEGIN} path--- / ${OB_FILE_END}`,
+    `- The path on ${OB_FILE_BEGIN} MUST exactly match the operation path in JSON.`,
+    '- Paste FULL source between BEGIN and END with real line breaks.',
+    '- Do NOT use markdown ``` code fences for file content.',
+    '- Do NOT use ChatGPT/Gemini file attachment UI, canvas, copy-code widgets, or download cards.',
+    '- Write file content directly in the chat message as plain text between the markers.',
+    '',
+    'Block format:',
+    `${OB_FILE_BEGIN} relative/path.ext---`,
+    '<full file source, plain text>',
+    OB_FILE_END,
     '',
     '## Allowed actions',
     'CREATE_FILE, EDIT_FILE, DELETE_FILE, RENAME_FILE, CREATE_FOLDER, RUN_COMMAND',
     '',
     '## CREATE_FILE rules',
     '- Use for new files (including package.json).',
-    '- Always include a matching ```file:path``` block with complete content.',
+    `- Always include a matching ${OB_FILE_BEGIN} path--- block with complete content.`,
     '- Prefer CREATE_FILE over EDIT_FILE for new projects.',
     '',
     '## EDIT_FILE rules',
-    '- If the file does NOT exist yet: OpenBrowser will create it, but you must provide full content in a ```file:path``` block.',
+    `- If the file does NOT exist yet: use CREATE_FILE or EDIT_FILE with a ${OB_FILE_BEGIN} block (full content).`,
     '- If the file ALREADY exists (see project context with line numbers):',
-    '  - Prefer partial edit: { "action": "EDIT_FILE", "path": "...", "startLine": N, "endLine": M, "replace": "new lines" }',
+    '  - Prefer partial edit: { "action": "EDIT_FILE", "path": "...", "startLine": N, "endLine": M, "replace": "single line or use \\\\n" }',
     '  - Or search/replace: { "search": "old", "replace": "new" }',
-    '  - Or full rewrite: ```file:path``` block with entire updated file',
+    `- Or full rewrite: ${OB_FILE_BEGIN} path--- block with entire updated file`,
+    `- For full file rewrites, prefer ${OB_FILE_BEGIN} blocks — do NOT put multiline code inside JSON "replace".`,
+    '- Escape quotes in JSON strings (use \\" inside replace).',
     '- Do NOT use EDIT_FILE on package.json right after npm init — use CREATE_FILE with full package.json instead.',
     '',
     '## Other rules',
     '- RUN_COMMAND runs in project root; use "cd folder && cmd" when needed.',
     '- Paths must be relative. No ../ traversal. No "..." placeholders.',
-    '- Every CREATE_FILE and every EDIT_FILE that needs full content must have a ```file:path``` block.',
+    `- Every CREATE_FILE and every EDIT_FILE that needs full content must have a ${OB_FILE_BEGIN} block.`,
     '',
     '## Full example (new Express app)',
     HYBRID_EXPRESS_EXAMPLE,
@@ -168,29 +180,32 @@ function buildRetryFormatInstructions(conversationId: string): string {
     '',
     'Required structure:',
     '1) JSON operations array + conversationId',
-    '2) ```file:relative/path``` fenced block for EVERY file that needs content',
+    `2) ${OB_FILE_BEGIN} relative/path--- ... ${OB_FILE_END} for EVERY file that needs content`,
+    `3) Each ${OB_FILE_BEGIN} path must exactly match the operation path — never swap files`,
     '',
     `conversationId: ${conversationId}`,
     '',
     'CREATE_FILE / new files:',
-    '- Use CREATE_FILE in JSON + ```file:path``` with full source',
+    `- Use CREATE_FILE in JSON + ${OB_FILE_BEGIN} path--- with full plain-text source`,
     '- Include package.json as CREATE_FILE (not EDIT_FILE) when scaffolding a new app',
     '',
     'EDIT_FILE:',
-    '- File missing → CREATE_FILE or EDIT_FILE with full ```file:path``` content (file will be created)',
-    '- File exists → use startLine/endLine/replace OR search/replace OR full ```file:path``` rewrite',
+    `- File missing → CREATE_FILE or EDIT_FILE with full ${OB_FILE_BEGIN} content (file will be created)`,
+    `- File exists → use startLine/endLine/replace OR search/replace OR full ${OB_FILE_BEGIN} rewrite`,
     '',
     'Do NOT use:',
-    '- File attachment / canvas UI',
-    '- Bare code without ```file:path``` fences',
-    '- JSON-only operations without code blocks',
+    '- Markdown ``` code fences (OpenBrowser cannot capture them reliably)',
+    '- File attachment / canvas / copy-code UI',
+    '- Bare code without OB_FILE markers',
+    '- JSON-only operations without file blocks',
+    `- Multiline source inside JSON replace (use ${OB_FILE_BEGIN} instead)`,
     '',
     'Minimal example:',
     `{ "operations": [{ "action": "CREATE_FILE", "path": "package.json" }], "conversationId": "${conversationId}" }`,
     '',
-    '```file:package.json',
+    `${OB_FILE_BEGIN} package.json---`,
     '{ "name": "app", "version": "1.0.0" }',
-    '```',
+    OB_FILE_END,
   ].join('\n');
 }
 

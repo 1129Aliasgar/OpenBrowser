@@ -197,7 +197,13 @@ async function runAsk(prompt: string, options: RunOptions = {}): Promise<void> {
     tracker.step('reading project', `${contextPaths.length} context reference(s)`);
     const files = await loadContextFiles(process.cwd(), contextPaths);
     contextBlock = formatContextMarkdown(files);
-    output.write(`\nAttached ${files.length} file(s) as Markdown context.\n`);
+    if (files.length === 0) {
+      output.write(
+        `\nWarning: @ references [${contextPaths.join(', ')}] matched no files. Use Tab after @ to complete paths.\n`,
+      );
+    } else {
+      output.write(`\nAttached ${files.length} file(s) as Markdown context.\n`);
+    }
   }
 
   const message = buildFullMessage('ask', systemPrompt, userPrompt, contextBlock);
@@ -243,6 +249,10 @@ async function runAgent(task: string, options: RunOptions = {}): Promise<void> {
 
   if (attachedFiles.length > 0) {
     output.write(`\nAttached ${attachedFiles.length} file(s) as JSON context.\n`);
+  } else if (contextPaths.length > 0) {
+    output.write(
+      `\nWarning: @ references [${contextPaths.join(', ')}] matched no files. Use Tab after @ to complete paths.\n`,
+    );
   }
 
   const conversationId = crypto.randomUUID();

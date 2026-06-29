@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "OpenBrowser Bridge",
-  "version": "0.7.3",
+  "version": "0.7.7",
   "description": "Connects browser AI chat pages to the local OpenBrowser bridge server.",
   "permissions": ["activeTab", "alarms", "scripting", "storage", "tabs"],
   "host_permissions": [

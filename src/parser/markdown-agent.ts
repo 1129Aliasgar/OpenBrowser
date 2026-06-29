@@ -10,17 +10,98 @@ export interface ContentSegment {
 
 const PATH_PATTERN = '([a-zA-Z0-9_./-]+\\.[a-zA-Z0-9]+)';
 const PATH_FILE_RE = /[a-zA-Z0-9_./-]+\.[a-zA-Z0-9]+/;
+const OB_FILE_BEGIN = '---OB_FILE_BEGIN:';
+const OB_FILE_END = '---OB_FILE_END---';
+const OB_FILE_BLOCK_RE =
+  /---OB_FILE_BEGIN:\s*([^\n-]+?)---\s*\n([\s\S]*?)---OB_FILE_END---/gi;
+
+/** Detect markdown code fences when the model should use OB_FILE blocks. */
+export function detectCopyPasteBlocks(raw: string): string | null {
+  if (!/```/.test(raw)) {
+    return null;
+  }
+
+  if (/---OB_FILE_BEGIN:/i.test(raw)) {
+    return null;
+  }
+
+  return [
+    'You used markdown code fences (```). OpenBrowser cannot capture those reliably from ChatGPT/Gemini UI.',
+    `Re-send using ONLY ${OB_FILE_BEGIN} relative/path--- ... ${OB_FILE_END} blocks with plain-text file content.`,
+    'Do NOT use ``` fences, file attachment UI, canvas, or copy-code widgets.',
+  ].join(' ');
+}
 
 function normalizePath(filePath: string): string {
   return filePath.replace(/\\/g, '/').replace(/^\.\//, '').trim();
 }
 
+function pathKey(filePath: string): string {
+  return normalizePath(filePath).toLowerCase();
+}
+
+/** Parse `file:src/foo.js` or bare `src/foo.js` from a label line. */
+export function extractFilePathLabel(text: string): string | null {
+  const trimmed = text.trim();
+  const filePrefix = /^file:\s*(\S+)/i.exec(trimmed);
+  if (filePrefix?.[1]) {
+    return normalizePath(filePrefix[1]);
+  }
+
+  const match = new RegExp(`^${PATH_PATTERN}$`, 'i').exec(trimmed);
+  if (match?.[1]) {
+    return normalizePath(match[1]);
+  }
+
+  const embedded = new RegExp(PATH_PATTERN).exec(trimmed);
+  return embedded?.[1] ? normalizePath(embedded[1]) : null;
+}
+
+/** Build capture text like the extension sends after reading labeled LLM file blocks. */
+export function buildLlmCaptureText(parts: {
+  operationsJson: string;
+  files: { path: string; content: string }[];
+}): string {
+  const blocks = parts.files.map(
+    (file) => `${OB_FILE_BEGIN} ${file.path}---\n${file.content.trim()}\n${OB_FILE_END}`,
+  );
+  return [parts.operationsJson.trim(), ...blocks].join('\n\n');
+}
+
+export function extractObFileBlocks(markdown: string): MarkdownFileBlock[] {
+  const blocks = new Map<string, MarkdownFileBlock>();
+
+  for (const match of markdown.matchAll(OB_FILE_BLOCK_RE)) {
+    const filePath = normalizePath(match[1] ?? '');
+    const content = normalizeMultilineText((match[2] ?? '').replace(/\n$/, '').trim());
+    if (filePath && content && !isOperationsJson(content)) {
+      blocks.set(pathKey(filePath), { path: filePath, content });
+    }
+  }
+
+  return [...blocks.values()];
+}
+
+/** Unescape literal \\n / \\t sequences and normalize line endings. */
+export function normalizeMultilineText(value: string): string {
+  return value
+    .replace(/\r\n/g, '\n')
+    .replace(/\\n/g, '\n')
+    .replace(/\\t/g, '\t')
+    .replace(/\\"/g, '"');
+}
+
 export function extractFileBlocks(markdown: string): MarkdownFileBlock[] {
-  const blocks = new Map<string, string>();
+  const blocks = new Map<string, MarkdownFileBlock>();
+
+  for (const block of extractObFileBlocks(markdown)) {
+    blocks.set(pathKey(block.path), block);
+  }
 
   for (const segment of extractOrderedContentSegments(markdown)) {
     if (segment.path) {
-      blocks.set(segment.path, segment.content);
+      const path = normalizePath(segment.path);
+      blocks.set(pathKey(path), { path, content: segment.content });
     }
   }
 
@@ -40,49 +121,80 @@ export function extractFileBlocks(markdown: string): MarkdownFileBlock[] {
   for (const pattern of patterns) {
     for (const match of markdown.matchAll(pattern)) {
       const filePath = normalizePath(match[1] ?? '');
-      const content = (match[2] ?? '').replace(/\n$/, '');
+      const content = normalizeMultilineText((match[2] ?? '').replace(/\n$/, ''));
       if (filePath && content.trim() && !isOperationsJson(content)) {
-        blocks.set(filePath, content);
+        blocks.set(pathKey(filePath), { path: filePath, content });
       }
     }
   }
 
-  return [...blocks.entries()].map(([path, content]) => ({ path, content }));
+  return [...blocks.values()];
 }
 
 export function extractOrderedContentSegments(markdown: string): ContentSegment[] {
-  const remainder = stripOperationsHeader(markdown).trim();
+  const remainder = stripAllOperationsJson(markdown).trim();
   if (!remainder) {
     return [];
   }
 
   const segments: ContentSegment[] = [];
+
+  for (const block of extractObFileBlocks(remainder)) {
+    segments.push({ path: block.path, content: block.content });
+  }
+
+  const scanText = stripObFileBlocks(remainder);
   let pos = 0;
 
-  while (pos < remainder.length) {
-    const fenceStart = remainder.indexOf('```', pos);
+  while (pos < scanText.length) {
+    const fenceStart = scanText.indexOf('```', pos);
     if (fenceStart === -1) {
-      appendPlainSegments(remainder.slice(pos), segments);
+      appendPlainSegments(scanText.slice(pos), segments);
       break;
     }
 
     if (fenceStart > pos) {
-      appendPlainSegments(remainder.slice(pos, fenceStart), segments);
+      const prefix = scanText.slice(pos, fenceStart).trim();
+      const prefixPath = extractPrefixPathLabel(prefix);
+      if (prefixPath) {
+        pos = fenceStart;
+        const lineEnd = scanText.indexOf('\n', fenceStart);
+        if (lineEnd === -1) {
+          break;
+        }
+        const contentStart = lineEnd + 1;
+        const fenceEnd = scanText.indexOf('```', contentStart);
+        if (fenceEnd === -1) {
+          break;
+        }
+        const content = normalizeMultilineText(
+          scanText.slice(contentStart, fenceEnd).replace(/\n$/, '').trim(),
+        );
+        if (content && !isOperationsJson(content)) {
+          segments.push({ path: prefixPath, content });
+        }
+        pos = fenceEnd + 3;
+        continue;
+      }
+
+      appendPlainSegments(prefix, segments);
     }
 
-    const lineEnd = remainder.indexOf('\n', fenceStart);
+    const lineEnd = scanText.indexOf('\n', fenceStart);
     if (lineEnd === -1) {
       break;
     }
 
-    const tag = remainder.slice(fenceStart + 3, lineEnd).trim();
+    const tag = scanText.slice(fenceStart + 3, lineEnd).trim();
     const contentStart = lineEnd + 1;
-    const fenceEnd = remainder.indexOf('```', contentStart);
+    const fenceEnd = scanText.indexOf('```', contentStart);
     if (fenceEnd === -1) {
       break;
     }
 
-    const content = remainder.slice(contentStart, fenceEnd).replace(/\n$/, '').trim();
+    const content = normalizeMultilineText(
+      scanText.slice(contentStart, fenceEnd).replace(/\n$/, '').trim(),
+    );
     if (content && !isOperationsJson(content)) {
       let path: string | undefined;
       if (tag.startsWith('file:')) {
@@ -98,6 +210,10 @@ export function extractOrderedContentSegments(markdown: string): ContentSegment[
   }
 
   return segments;
+}
+
+function stripObFileBlocks(text: string): string {
+  return text.replace(OB_FILE_BLOCK_RE, '').trim();
 }
 
 function appendPlainSegments(text: string, segments: ContentSegment[]): void {
@@ -120,7 +236,7 @@ function appendPlainSegments(text: string, segments: ContentSegment[]): void {
 
     const labeledPath = extractLeadingPathLabel(body);
     if (labeledPath) {
-      const content = body.slice(labeledPath.length).trim();
+      const content = normalizeMultilineText(body.slice(labeledPath.length).trim());
       if (content) {
         segments.push({ path: labeledPath, content });
         continue;
@@ -128,14 +244,38 @@ function appendPlainSegments(text: string, segments: ContentSegment[]): void {
     }
 
     if (looksLikeFileContent(body)) {
-      segments.push({ content: body });
+      segments.push({ content: normalizeMultilineText(body) });
     }
   }
 }
 
 function extractLeadingPathLabel(body: string): string | null {
+  const fileLine = extractFilePathLabel(body.split('\n')[0] ?? body);
+  if (fileLine && /^file:\s*\S+/i.test(body)) {
+    return fileLine;
+  }
+
   const match = new RegExp(`^${PATH_PATTERN}\\s*\\n`, 'i').exec(body);
   return match?.[1] ? normalizePath(match[1]) : null;
+}
+
+function extractPrefixPathLabel(prefix: string): string | null {
+  if (!prefix) {
+    return null;
+  }
+
+  const lines = prefix.split('\n').map((line) => line.trim()).filter(Boolean);
+  if (lines.length !== 1) {
+    return null;
+  }
+
+  const path = extractFilePathLabel(lines[0] ?? '');
+  if (!path) {
+    return null;
+  }
+
+  const line = lines[0] ?? '';
+  return /^file:\s*\S+/i.test(line) || line === path ? path : null;
 }
 
 function looksLikeFileContent(body: string): boolean {
@@ -151,26 +291,50 @@ function looksLikeFileContent(body: string): boolean {
   return /^(const |import |export |module\.exports|require\(|function |class |\/\/|\/\*)/m.test(body);
 }
 
-function stripOperationsHeader(raw: string): string {
-  const start = raw.indexOf('{');
-  if (start === -1) {
-    return raw;
+function stripAllOperationsJson(raw: string): string {
+  let text = raw;
+  let block = findOperationsJsonBlock(text, 0);
+
+  while (block) {
+    text = `${text.slice(0, block.start)}${text.slice(block.end)}`;
+    block = findOperationsJsonBlock(text, 0);
   }
 
+  return text;
+}
+
+function findOperationsJsonBlock(
+  text: string,
+  fromIndex: number,
+): { start: number; end: number } | null {
+  const start = text.indexOf('{', fromIndex);
+  if (start === -1) {
+    return null;
+  }
+
+  const json = extractBalancedJson(text, start);
+  if (!json || !isOperationsJson(json)) {
+    return findOperationsJsonBlock(text, start + 1);
+  }
+
+  return { start, end: start + json.length };
+}
+
+function extractBalancedJson(text: string, start: number): string | null {
   let depth = 0;
-  for (let index = start; index < raw.length; index += 1) {
-    const char = raw[index];
+  for (let index = start; index < text.length; index += 1) {
+    const char = text[index];
     if (char === '{') {
       depth += 1;
     } else if (char === '}') {
       depth -= 1;
       if (depth === 0) {
-        return raw.slice(index + 1);
+        return text.slice(start, index + 1);
       }
     }
   }
 
-  return raw.slice(start);
+  return null;
 }
 
 function isOperationsJson(content: string): boolean {
@@ -190,7 +354,7 @@ function isOperationsJson(content: string): boolean {
 export function mergeFileBlocksIntoOperations<
   T extends { action: string; path?: string; content?: string },
 >(operations: T[], blocks: MarkdownFileBlock[], rawMarkdown = ''): T[] {
-  const byPath = new Map(blocks.map((block) => [normalizePath(block.path), block.content]));
+  const byPath = new Map(blocks.map((block) => [pathKey(block.path), block.content]));
 
   const merged = operations.map((operation) => {
     if (operation.action !== 'CREATE_FILE' && operation.action !== 'EDIT_FILE') {
@@ -198,10 +362,13 @@ export function mergeFileBlocksIntoOperations<
     }
 
     if (operation.content?.trim()) {
-      return operation;
+      return {
+        ...operation,
+        content: normalizeMultilineText(operation.content),
+      };
     }
 
-    const normalized = normalizePath(operation.path ?? '');
+    const normalized = pathKey(operation.path ?? '');
     const content = byPath.get(normalized);
     if (!content) {
       return operation;
@@ -210,10 +377,10 @@ export function mergeFileBlocksIntoOperations<
     return { ...operation, content };
   });
 
-  return mergeSequentialSegments(merged, extractOrderedContentSegments(rawMarkdown));
+  return mergePathMatchedSegments(merged, extractOrderedContentSegments(rawMarkdown));
 }
 
-function mergeSequentialSegments<T extends { action: string; path?: string; content?: string }>(
+function mergePathMatchedSegments<T extends { action: string; path?: string; content?: string }>(
   operations: T[],
   segments: ContentSegment[],
 ): T[] {
@@ -233,28 +400,51 @@ function mergeSequentialSegments<T extends { action: string; path?: string; cont
   const result = [...operations];
 
   for (const { operation, index } of pendingOps) {
-    const targetPath = normalizePath(operation.path ?? '');
+    const targetPath = pathKey(operation.path ?? '');
     const labeledIndex = segments.findIndex(
       (segment, segmentIndex) =>
         !usedSegments.has(segmentIndex) &&
         segment.path !== undefined &&
-        normalizePath(segment.path) === targetPath,
+        pathKey(segment.path) === targetPath,
     );
 
     if (labeledIndex !== -1) {
       usedSegments.add(labeledIndex);
       result[index] = { ...operation, content: segments[labeledIndex].content };
-      continue;
     }
+  }
 
-    const nextIndex = segments.findIndex((_segment, segmentIndex) => !usedSegments.has(segmentIndex));
-    if (nextIndex !== -1) {
-      usedSegments.add(nextIndex);
-      result[index] = { ...operation, content: segments[nextIndex].content };
+  const stillPending = pendingOps.filter(({ index }) => !result[index]?.content?.trim());
+  const unlabeled = segments
+    .map((segment, segmentIndex) => ({ segment, segmentIndex }))
+    .filter(
+      ({ segment, segmentIndex }) => !usedSegments.has(segmentIndex) && segment.path === undefined,
+    );
+
+  if (stillPending.length > 0 && stillPending.length === unlabeled.length) {
+    for (let i = 0; i < stillPending.length; i += 1) {
+      const { operation, index } = stillPending[i]!;
+      const segment = unlabeled[i]!.segment;
+      result[index] = { ...operation, content: segment.content };
     }
   }
 
   return result;
+}
+
+export function normalizeOperationTextFields<
+  T extends {
+    content?: string;
+    search?: string;
+    replace?: string;
+  },
+>(operations: T[]): T[] {
+  return operations.map((operation) => ({
+    ...operation,
+    content: operation.content !== undefined ? normalizeMultilineText(operation.content) : undefined,
+    search: operation.search !== undefined ? normalizeMultilineText(operation.search) : undefined,
+    replace: operation.replace !== undefined ? normalizeMultilineText(operation.replace) : undefined,
+  }));
 }
 
 export function validateMergedFileOperations(
@@ -273,7 +463,7 @@ export function validateMergedFileOperations(
     if (operation.action === 'CREATE_FILE') {
       if (!operation.content?.trim()) {
         throw new Error(
-          `Missing content for ${operation.path}. Add a fenced block: \`\`\`file:${operation.path}\n...\`\`\``,
+          `Missing content for ${operation.path}. Add an OpenBrowser file block: ${OB_FILE_BEGIN} ${operation.path}--- ... ${OB_FILE_END} (path must match exactly).`,
         );
       }
     }
@@ -281,7 +471,7 @@ export function validateMergedFileOperations(
     if (operation.action === 'EDIT_FILE') {
       if (!hasEditPayload(operation)) {
         throw new Error(
-          `Missing content for ${operation.path}. Use \`\`\`file:${operation.path}\`\`\` with full content, or startLine/endLine/replace for partial edits on existing files.`,
+          `Missing content for ${operation.path}. Use ${OB_FILE_BEGIN} ${operation.path}--- with full content, or startLine/endLine/replace for partial edits.`,
         );
       }
     }

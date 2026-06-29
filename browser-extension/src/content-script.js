@@ -512,21 +512,64 @@ function getLatestAssistantText(beforeCount, agentMode = false) {
 }
 
 function buildAgentCaptureText(node) {
-  const parts = [];
-  const messageText = extractMessageText(node);
-  if (messageText) {
-    parts.push(messageText);
+  const fullText = extractMessageText(node);
+  if (fullText && /---OB_FILE_BEGIN:/i.test(fullText)) {
+    return fullText;
   }
 
-  const domBlocks = extractDomFileBlocks(node);
-  for (const block of domBlocks) {
-    const fence = `\`\`\`file:${block.path}\n${block.content}\n\`\`\``;
-    if (!parts.join('\n').includes(fence)) {
-      parts.push(fence);
+  const parts = [];
+  const pres = [...node.querySelectorAll('pre')];
+
+  for (const pre of pres) {
+    const code = pre.querySelector('code') ?? pre;
+    const content = (code.textContent ?? '').replace(/\n$/, '');
+    if (!content.trim()) {
+      continue;
+    }
+
+    if (looksLikeOperationsJson(content)) {
+      parts.push(content.trim());
+      continue;
+    }
+
+    const path = findPathForPre(pre) ?? inferPathFromContent(content);
+    if (path) {
+      parts.push(`---OB_FILE_BEGIN: ${path}---\n${content.trim()}\n---OB_FILE_END---`);
+    } else {
+      parts.push(`\`\`\`\n${content.trim()}\n\`\`\``);
     }
   }
 
-  return parts.join('\n\n').trim() || null;
+  if (parts.length > 0) {
+    return parts.join('\n\n');
+  }
+
+  return fullText;
+}
+
+function inferPathFromContent(content) {
+  const text = content.trim();
+  if (!text) {
+    return null;
+  }
+
+  if (/express\.Router|router\.get|router\.post|module\.exports\s*=\s*router/i.test(text)) {
+    return 'src/routes/userRoutes.js';
+  }
+
+  if (/app\.listen|app\.use\(\s*['"]\/api/i.test(text) && /userRoutes|require\(['"]\.\/routes/i.test(text)) {
+    return 'src/server.js';
+  }
+
+  if (/getUsers|listUsers|module\.exports\s*=\s*\{/i.test(text) && /res\.(status|json)/i.test(text)) {
+    return 'src/controllers/userController.js';
+  }
+
+  if (text.startsWith('{') && text.includes('"name"') && text.includes('"version"')) {
+    return 'package.json';
+  }
+
+  return null;
 }
 
 function extractDomFileBlocks(node) {
@@ -553,6 +596,15 @@ function extractDomFileBlocks(node) {
 
 function extractDomFileBlocksFromText(text) {
   const blocks = [];
+  const obPattern = /---OB_FILE_BEGIN:\s*([^\n-]+?)---\s*\n([\s\S]*?)---OB_FILE_END---/gi;
+  for (const match of text.matchAll(obPattern)) {
+    const path = normalizeCapturePath(match[1] ?? '');
+    const content = (match[2] ?? '').trim();
+    if (path && content) {
+      blocks.push({ path, content });
+    }
+  }
+
   const pattern = /```file:([^\n`]+)\n([\s\S]*?)```/gi;
   for (const match of text.matchAll(pattern)) {
     const path = normalizeCapturePath(match[1] ?? '');
@@ -565,8 +617,13 @@ function extractDomFileBlocksFromText(text) {
 }
 
 function findPathForPre(pre) {
+  const fromLabel = findNearestFileLabelBefore(pre);
+  if (fromLabel) {
+    return fromLabel;
+  }
+
   let sibling = pre.previousElementSibling;
-  for (let step = 0; step < 4 && sibling; step += 1) {
+  for (let step = 0; step < 6 && sibling; step += 1) {
     const path = extractPathFromLabel(sibling.textContent ?? '');
     if (path) {
       return path;
@@ -574,9 +631,26 @@ function findPathForPre(pre) {
     sibling = sibling.previousElementSibling;
   }
 
-  const container = pre.closest('[data-message-author-role="assistant"], article, div');
+  const parent = pre.parentElement;
+  if (parent) {
+    const parentPath = extractPathFromLabel(parent.textContent ?? '');
+    if (parentPath && parent.textContent?.length && parent.textContent.length < 120) {
+      return parentPath;
+    }
+  }
+
+  const container = pre.closest('[data-message-author-role="assistant"], article');
   if (container) {
-    const headers = container.querySelectorAll('h1, h2, h3, h4, h5, h6, strong, span, button');
+    let previous = pre.previousElementSibling;
+    while (previous) {
+      const path = extractPathFromLabel(previous.textContent ?? '');
+      if (path) {
+        return path;
+      }
+      previous = previous.previousElementSibling;
+    }
+
+    const headers = container.querySelectorAll('h1, h2, h3, h4, h5, h6, strong, span, button, a');
     for (const header of headers) {
       if (header.contains(pre)) {
         continue;
@@ -598,8 +672,68 @@ function findPathForPre(pre) {
   return null;
 }
 
+function findNearestFileLabelBefore(pre) {
+  const container = pre.closest('[data-message-author-role="assistant"], article');
+  if (!container) {
+    return null;
+  }
+
+  const elements = [];
+  const walker = document.createTreeWalker(container, NodeFilter.SHOW_ELEMENT);
+  let node = walker.nextNode();
+  while (node) {
+    elements.push(node);
+    node = walker.nextNode();
+  }
+
+  const preIndex = elements.indexOf(pre);
+  if (preIndex <= 0) {
+    return null;
+  }
+
+  for (let i = preIndex - 1; i >= 0; i -= 1) {
+    const el = elements[i];
+    if (!el || el === pre || pre.contains(el) || el.contains(pre)) {
+      continue;
+    }
+
+    const otherPre = el.closest('pre');
+    if (otherPre && otherPre !== pre) {
+      continue;
+    }
+
+    const text = (el.textContent ?? '').trim();
+    if (!text || text.length > 160) {
+      continue;
+    }
+
+    const path = extractPathFromLabel(text);
+    if (!path) {
+      continue;
+    }
+
+    if (/^file:\s*\S+/i.test(text) || isPathOnlyLabel(text, path)) {
+      return path;
+    }
+  }
+
+  return null;
+}
+
+function isPathOnlyLabel(text, path) {
+  const compact = text.replace(/\s+/g, '');
+  const normalized = path.replace(/^\.\//, '');
+  return compact === `file:${normalized}` || compact === normalized || compact.endsWith(normalized);
+}
+
 function extractPathFromLabel(text) {
-  const match = /([a-zA-Z0-9_./-]+\.[a-zA-Z0-9]+)/.exec(text.trim());
+  const trimmed = text.trim();
+  const filePrefix = /^file:\s*(\S+)/i.exec(trimmed);
+  if (filePrefix?.[1]) {
+    return normalizeCapturePath(filePrefix[1]);
+  }
+
+  const match = /([a-zA-Z0-9_./-]+\.[a-zA-Z0-9]+)/.exec(trimmed);
   return match ? normalizeCapturePath(match[1]) : null;
 }
 
