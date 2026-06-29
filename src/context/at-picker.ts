@@ -1,4 +1,4 @@
-import { AutoComplete } from 'enquirer';
+import Enquirer from 'enquirer';
 import { listContextChoices } from './file-context.js';
 
 export function parseAtRefs(text: string): { cleanPrompt: string; paths: string[] } {
@@ -21,7 +21,7 @@ export async function pickContextPaths(projectRoot: string): Promise<string[]> {
     return [];
   }
 
-  const prompt = new AutoComplete({
+  const prompt = new Enquirer.AutoComplete({
     name: 'context',
     message: 'Attach file or folder (@)',
     limit: 12,
