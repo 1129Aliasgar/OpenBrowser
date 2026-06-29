@@ -1,3 +1,12 @@
+```text
+                                           ____                   ____                                      
+                                          / __ \____  ___  ____  / __ )_________ _      __________  _____
+                                         / / / / __ \/ _ \/ __ \/ __  / ___/ __ \ | /| / / ___/ _ \/ ___/
+                                        / /_/ / /_/ /  __/ / / / /_/ / /  / /_/ / |/ |/ (__  )  __/ /
+                                        \____/ .___/\___/_/ /_/_____/_/   \____/|__/|__/____/\___/_/
+                                            /_/
+```
+
 # OpenBrowser
 
 **Turn free browser AI chat into a local coding agent.**
@@ -8,11 +17,11 @@ OpenBrowser is a local-first CLI that connects ChatGPT, Gemini, DeepSeek, and ot
 
 ## Features
 
-| Mode | What it does |
-|------|----------------|
-| **Ask** | Auto-send prompt to ChatGPT with system instructions; response appears in terminal |
-| **Agent** | Auto-send task + project context + JSON schema instructions; preview diffs, apply or reject |
-| **Server** | Run the bridge API on `http://127.0.0.1:5000` for the browser extension |
+| Mode       | What it does                                                                                |
+| ---------- | ------------------------------------------------------------------------------------------- |
+| **Ask**    | Auto-send prompt to ChatGPT with system instructions; response appears in terminal          |
+| **Agent**  | Auto-send task + project context + JSON schema instructions; preview diffs, apply or reject |
+| **Server** | Run the bridge API on `http://127.0.0.1:5000` for the browser extension                     |
 
 - Local bridge server (Fastify) on port **5000**
 - Project context generation from your workspace
@@ -94,10 +103,10 @@ pnpm install
 copy .env.example .env
 ```
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `PORT` | `5000` | Bridge server port |
-| `BRIDGE_TOKEN` | *(optional)* | Bearer token for `/operations` and `/browser/message` requests |
+| Variable       | Default      | Description                                                    |
+| -------------- | ------------ | -------------------------------------------------------------- |
+| `PORT`         | `5000`       | Bridge server port                                             |
+| `BRIDGE_TOKEN` | _(optional)_ | Bearer token for `/operations` and `/browser/message` requests |
 
 ### 3. Build
 
@@ -244,17 +253,17 @@ http://127.0.0.1:5000
 
 ### Endpoints
 
-| Method | Path | Description |
-|--------|------|-------------|
-| `GET` | `/health` | Health check (used by the extension popup) |
-| `GET` | `/summary` | Project context summary |
-| `POST` | `/session/prompt` | CLI submits prompt job with system instructions |
-| `GET` | `/session/:id/events` | CLI SSE stream for completed response |
-| `GET` | `/browser/events` | Extension SSE stream for new prompt jobs |
-| `POST` | `/browser/claim` | Extension claims a job before processing |
-| `POST` | `/browser/response` | Extension posts AI reply back to bridge |
-| `POST` | `/operations/preview` | Preview diffs for operations |
-| `POST` | `/operations/apply` | Apply validated operations |
+| Method | Path                  | Description                                     |
+| ------ | --------------------- | ----------------------------------------------- |
+| `GET`  | `/health`             | Health check (used by the extension popup)      |
+| `GET`  | `/summary`            | Project context summary                         |
+| `POST` | `/session/prompt`     | CLI submits prompt job with system instructions |
+| `GET`  | `/session/:id/events` | CLI SSE stream for completed response           |
+| `GET`  | `/browser/events`     | Extension SSE stream for new prompt jobs        |
+| `POST` | `/browser/claim`      | Extension claims a job before processing        |
+| `POST` | `/browser/response`   | Extension posts AI reply back to bridge         |
+| `POST` | `/operations/preview` | Preview diffs for operations                    |
+| `POST` | `/operations/apply`   | Apply validated operations                      |
 
 ### Verify the server is running
 
@@ -316,7 +325,7 @@ The extension watches supported AI chat pages, detects structured JSON responses
    Bridge server is running on port 5000.
    ```
 
-   If it says *"Bridge server is not reachable"*, make sure `openbrowser server` is running.
+   If it says _"Bridge server is not reachable"_, make sure `openbrowser server` is running.
 
 ### How the extension works
 
@@ -391,19 +400,19 @@ openbrowser/
 
 ### `openbrowser` is not recognized (PowerShell)
 
-| Cause | Fix |
-|-------|-----|
-| pnpm global bin not in PATH | Run `pnpm setup`, restart PowerShell |
-| Project not built | Run `pnpm build` |
-| CLI not linked globally | Run `pnpm link --global`, then open a new terminal |
-| Want to skip global install | Use `pnpm start ask "..."` or `pnpm dev` |
+| Cause                       | Fix                                                |
+| --------------------------- | -------------------------------------------------- |
+| pnpm global bin not in PATH | Run `pnpm setup`, restart PowerShell               |
+| Project not built           | Run `pnpm build`                                   |
+| CLI not linked globally     | Run `pnpm link --global`, then open a new terminal |
+| Want to skip global install | Use `pnpm start ask "..."` or `pnpm dev`           |
 
 ### Timed out waiting for browser AI response
 
 1. Open `https://chatgpt.com` in Chrome (not just Edge/Firefox).
 2. Reload the ChatGPT tab after installing the extension.
 3. Reload the extension on `chrome://extensions`.
-4. Confirm the popup shows *"Bridge running"* and at least one AI tab ready.
+4. Confirm the popup shows _"Bridge running"_ and at least one AI tab ready.
 5. Run `openbrowser` from the project root — ask/agent start their own bridge server automatically.
 
 ### Extension shows "Bridge server is not reachable"
@@ -440,11 +449,11 @@ Terminal (CLI)  ──POST /session/prompt──►  Bridge :5000
                               ChatGPT (incl. temporary chat tabs)
 ```
 
-1. **CLI** — submits prompts with system instructions, waits for responses  
-2. **Bridge Server** — session queue, job dispatch, response delivery  
-3. **Browser Extension** — SSE job delivery, ProseMirror injection, response capture  
-4. **Context Engine** — reads workspace and builds agent prompts  
-5. **Operation Executor** — applies approved file changes  
+1. **CLI** — submits prompts with system instructions, waits for responses
+2. **Bridge Server** — session queue, job dispatch, response delivery
+3. **Browser Extension** — SSE job delivery, ProseMirror injection, response capture
+4. **Context Engine** — reads workspace and builds agent prompts
+5. **Operation Executor** — applies approved file changes
 
 For the full product specification, see [pid.md](./pid.md).
 
