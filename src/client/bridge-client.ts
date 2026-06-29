@@ -16,6 +16,7 @@ export interface SessionStatusResponse {
   status: 'pending' | 'claimed' | 'complete' | 'error';
   mode: SessionMode;
   response?: string;
+  partialText?: string;
   error?: string;
 }
 
@@ -69,7 +70,11 @@ export async function getSessionStatus(
 
 export async function waitForSessionResponse(
   sessionId: string,
-  options: { timeoutMs?: number; port?: number } = {},
+  options: {
+    timeoutMs?: number;
+    port?: number;
+    onChunk?: (text: string) => void;
+  } = {},
 ): Promise<string> {
   const timeoutMs = options.timeoutMs ?? 120_000;
   const port = options.port ?? DEFAULT_PORT;
@@ -81,13 +86,16 @@ export async function waitForSessionResponse(
   if (existing.status === 'error') {
     throw new Error(existing.error ?? 'Browser session failed');
   }
+  if (existing.partialText) {
+    options.onChunk?.(existing.partialText);
+  }
 
-  return waitForSessionSse(sessionId, { timeoutMs, port });
+  return waitForSessionSse(sessionId, { timeoutMs, port, onChunk: options.onChunk });
 }
 
 async function waitForSessionSse(
   sessionId: string,
-  options: { timeoutMs: number; port: number },
+  options: { timeoutMs: number; port: number; onChunk?: (text: string) => void },
 ): Promise<string> {
   const response = await fetch(`${baseUrl(options.port)}/session/${sessionId}/events`, {
     headers: authHeaders(),
@@ -123,6 +131,10 @@ async function waitForSessionSse(
 
           buffer += decoder.decode(value, { stream: true });
           buffer = consumeSseBuffer(buffer, (event, data) => {
+            if (event === 'chunk') {
+              options.onChunk?.(data.text as string);
+              return;
+            }
             if (event === 'complete') {
               clearTimeout(timeout);
               reader.cancel().catch(() => undefined);

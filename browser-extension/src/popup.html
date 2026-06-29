@@ -7,9 +7,40 @@
   </head>
   <body>
     <main>
-      <h1>OpenBrowser</h1>
-      <p id="status">Checking bridge...</p>
-      <button id="check">Refresh</button>
+      <header class="header">
+        <h1>OpenBrowser</h1>
+        <span class="version">v0.5</span>
+      </header>
+
+      <section class="card" id="bridge-card">
+        <div class="card-title">Bridge</div>
+        <div class="status-row">
+          <span class="dot" id="bridge-dot"></span>
+          <span id="bridge-status">Checking...</span>
+        </div>
+        <div class="meta" id="bridge-meta">127.0.0.1:5000</div>
+      </section>
+
+      <section class="card" id="page-card">
+        <div class="card-title">Current Page</div>
+        <div class="status-row">
+          <span class="dot" id="page-dot"></span>
+          <span id="page-host">—</span>
+        </div>
+        <div class="meta" id="page-provider">—</div>
+      </section>
+
+      <section class="card">
+        <div class="card-title">Providers</div>
+        <ul id="provider-list" class="provider-list"></ul>
+      </section>
+
+      <section class="card">
+        <div class="card-title">Open Tabs</div>
+        <div class="meta" id="tabs-summary">0 tabs</div>
+      </section>
+
+      <button id="check" type="button">Refresh Status</button>
     </main>
     <script type="module" src="./popup.js"></script>
   </body>

@@ -8,7 +8,7 @@ export const logger = pino(
   pino.destination(2),
 );
 
-export { renderMarkdownForTerminal, writeAnswerBlock } from './terminal.js';
+export { AnswerStream, renderMarkdownForTerminal, writeAnswerBlock } from './terminal.js';
 
 export type TrackerStep =
   | 'reading browser'

@@ -1,30 +1,122 @@
 body {
-  min-width: 240px;
+  min-width: 300px;
   margin: 0;
-  color: #172026;
-  background: #f7f8f8;
-  font: 14px/1.4 system-ui, sans-serif;
+  color: #e8eaed;
+  background: #111418;
+  font: 13px/1.45 system-ui, sans-serif;
 }
 
 main {
   padding: 14px;
 }
 
-h1 {
-  margin: 0 0 8px;
-  font-size: 16px;
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
 }
 
-p {
-  margin: 0 0 12px;
+h1 {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.version {
+  color: #8b949e;
+  font-size: 11px;
+}
+
+.card {
+  background: #1a1f27;
+  border: 1px solid #2d333b;
+  border-radius: 10px;
+  padding: 10px 12px;
+  margin-bottom: 10px;
+}
+
+.card-title {
+  color: #8b949e;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  margin-bottom: 6px;
+}
+
+.status-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 500;
+}
+
+.meta {
+  margin-top: 4px;
+  color: #8b949e;
+  font-size: 12px;
+}
+
+.dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.dot.online {
+  background: #3fb950;
+  box-shadow: 0 0 6px rgba(63, 185, 80, 0.6);
+}
+
+.dot.offline {
+  background: #f85149;
+}
+
+.dot.pending {
+  background: #d29922;
+}
+
+.provider-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.provider-item {
+  display: grid;
+  grid-template-columns: 10px 1fr auto;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 0;
+  border-bottom: 1px solid #2d333b;
+}
+
+.provider-item:last-child {
+  border-bottom: none;
+}
+
+.provider-name {
+  font-weight: 500;
+}
+
+.provider-host {
+  color: #8b949e;
+  font-size: 11px;
 }
 
 button {
   width: 100%;
-  border: 1px solid #9aa6ac;
-  border-radius: 6px;
-  background: #ffffff;
-  color: #172026;
+  border: 1px solid #30363d;
+  border-radius: 8px;
+  background: #21262d;
+  color: #e8eaed;
   cursor: pointer;
-  padding: 8px 10px;
+  padding: 9px 10px;
+  font-weight: 500;
+}
+
+button:hover {
+  background: #30363d;
 }

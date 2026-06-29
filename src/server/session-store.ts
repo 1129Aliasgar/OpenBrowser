@@ -15,6 +15,7 @@ export interface PromptSession {
   conversationId: string;
   status: SessionStatus;
   response?: string;
+  partialText?: string;
   error?: string;
   createdAt: string;
   claimedAt?: string;
@@ -85,6 +86,19 @@ export function releaseClaim(sessionId: string): PromptSession | undefined {
 
 export function getSession(sessionId: string): PromptSession | undefined {
   return sessions.get(sessionId);
+}
+
+export function updateSessionPartial(
+  sessionId: string,
+  partialText: string,
+): PromptSession | undefined {
+  const session = sessions.get(sessionId);
+  if (!session) {
+    return undefined;
+  }
+
+  session.partialText = partialText;
+  return session;
 }
 
 export function completeSession(sessionId: string, response: string): PromptSession | undefined {

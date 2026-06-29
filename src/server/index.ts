@@ -12,6 +12,7 @@ import {
   createSseStream,
   addSessionClient,
   notifySessionComplete,
+  notifySessionChunk,
   notifySessionError,
   removeBrowserClient,
   removeSessionClient,
@@ -24,6 +25,7 @@ import {
   failSession,
   getSession,
   tryClaimSession,
+  updateSessionPartial,
 } from './session-store.js';
 
 const PORT = Number(process.env.PORT ?? 5000);
@@ -122,6 +124,7 @@ export async function createBridgeServer(): Promise<FastifyInstance> {
       status: session.status,
       mode: session.mode,
       response: session.response,
+      partialText: session.partialText,
       error: session.error,
     };
   });
@@ -157,6 +160,10 @@ export async function createBridgeServer(): Promise<FastifyInstance> {
 
     addSessionClient(sessionId, client);
     heartbeat = startSessionHeartbeat(sessionId, client);
+
+    if (session.partialText) {
+      sendSseEvent(raw, 'chunk', { text: session.partialText });
+    }
   });
 
   app.get('/browser/events', async (request, reply) => {
@@ -196,6 +203,26 @@ export async function createBridgeServer(): Promise<FastifyInstance> {
         conversationId: session.conversationId,
       },
     };
+  });
+
+  app.post('/browser/chunk', async (request) => {
+    const body = request.body as {
+      sessionId?: string;
+      text?: string;
+    };
+
+    if (!body.sessionId || body.text === undefined) {
+      throw new Error('sessionId and text are required');
+    }
+
+    const session = getSession(body.sessionId);
+    if (!session) {
+      throw new Error('Session not found');
+    }
+
+    updateSessionPartial(body.sessionId, body.text);
+    notifySessionChunk(body.sessionId, { text: body.text });
+    return { accepted: true };
   });
 
   app.post('/browser/response', async (request) => {

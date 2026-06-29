@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "OpenBrowser Bridge",
-  "version": "0.3.0",
+  "version": "0.5.0",
   "description": "Connects browser AI chat pages to the local OpenBrowser bridge server.",
   "permissions": ["activeTab", "scripting", "storage", "tabs"],
   "host_permissions": [
@@ -9,7 +9,15 @@
     "https://chatgpt.com/*",
     "https://chat.openai.com/*",
     "https://gemini.google.com/*",
-    "https://chat.deepseek.com/*"
+    "https://chat.deepseek.com/*",
+    "https://claude.ai/*",
+    "https://www.perplexity.ai/*",
+    "https://perplexity.ai/*",
+    "https://chat.z.ai/*",
+    "https://glm.ai/*",
+    "https://open.bigmodel.cn/*",
+    "https://grok.com/*",
+    "https://x.com/*"
   ],
   "background": {
     "service_worker": "src/background.js",
@@ -21,9 +29,17 @@
         "https://chatgpt.com/*",
         "https://chat.openai.com/*",
         "https://gemini.google.com/*",
-        "https://chat.deepseek.com/*"
+        "https://chat.deepseek.com/*",
+        "https://claude.ai/*",
+        "https://www.perplexity.ai/*",
+        "https://perplexity.ai/*",
+        "https://chat.z.ai/*",
+        "https://glm.ai/*",
+        "https://open.bigmodel.cn/*",
+        "https://grok.com/*",
+        "https://x.com/*"
       ],
-      "js": ["src/content-script.js"],
+      "js": ["src/providers.js", "src/content-script.js"],
       "run_at": "document_idle"
     }
   ],

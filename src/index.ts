@@ -22,7 +22,7 @@ import {
   buildFullMessage,
 } from './prompts/system.js';
 import { startServer } from './server/index.js';
-import { AgentStepTracker, formatError, writeAnswerBlock, type TrackerStep } from './shared/index.js';
+import { AgentStepTracker, AnswerStream, formatError, type TrackerStep } from './shared/index.js';
 
 const program = new Command();
 const DEFAULT_PORT = Number(process.env.PORT ?? 5000);
@@ -154,10 +154,14 @@ async function readPromptWithContext(
 async function waitForBrowserResponse(
   sessionId: string,
   rl?: readline.Interface,
+  options: { onChunk?: (text: string) => void } = {},
 ): Promise<string> {
   rl?.pause();
   try {
-    return await waitForSessionResponse(sessionId, { port: DEFAULT_PORT });
+    return await waitForSessionResponse(sessionId, {
+      port: DEFAULT_PORT,
+      onChunk: options.onChunk,
+    });
   } finally {
     rl?.resume();
   }
@@ -190,6 +194,9 @@ async function runAsk(prompt: string, options: RunOptions = {}): Promise<void> {
   tracker.step('reading browser', 'sending prompt to ChatGPT');
   output.write('\nSending to browser AI (open ChatGPT with the extension loaded)...\n');
 
+  const stream = new AnswerStream();
+  stream.startWaiting();
+
   const { sessionId } = await submitPrompt({
     mode: 'ask',
     prompt: userPrompt,
@@ -199,9 +206,12 @@ async function runAsk(prompt: string, options: RunOptions = {}): Promise<void> {
   });
 
   try {
-    const answer = await waitForBrowserResponse(sessionId, options.rl);
+    const answer = await waitForBrowserResponse(sessionId, options.rl, {
+      onChunk: (text) => stream.onChunk(text),
+    });
+
     tracker.complete('ask response received');
-    writeAnswerBlock(answer || '(empty response)');
+    stream.finish(answer || '(empty response)');
   } catch (error) {
     output.write(`\nAsk error: ${formatError(error)}\n`);
   }

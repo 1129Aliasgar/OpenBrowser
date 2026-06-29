@@ -1,23 +1,21 @@
 const BRIDGE_URL = 'http://127.0.0.1:5000';
 
-const SUPPORTED_HOSTS = new Set([
-  'chatgpt.com',
-  'chat.openai.com',
-  'gemini.google.com',
-  'chat.deepseek.com',
-]);
-
-const RESPONSE_TIMEOUT_MS = 120_000;
+const RESPONSE_TIMEOUT_MS = 180_000;
 const STABLE_MS = 2_000;
-const POLL_MS = 500;
+const ASK_STABLE_MS = 3_000;
+const POLL_MS = 400;
+const CHUNK_MIN_CHARS = 24;
+const CHUNK_MIN_MS = 250;
 const SEND_RETRY_MS = 250;
 const SEND_MAX_RETRIES = 20;
+const FINISH_RECHECK_MS = 600;
 
 let running = false;
 let eventSource = null;
 const processedSessionIds = new Set();
 
-if (SUPPORTED_HOSTS.has(location.hostname)) {
+const provider = getProviderForHost(location.hostname);
+if (provider) {
   connectBrowserEvents();
 }
 
@@ -109,7 +107,10 @@ async function processJob(job) {
   await injectPrompt(job.message);
   await clickSendWhenReady();
 
-  const text = await waitForPlainResponse(beforeCount, job.mode);
+  const text = await waitForPlainResponse(beforeCount, job.mode, job.sessionId);
+  if (job.mode === 'ask' && job.sessionId) {
+    await postBrowserChunk({ sessionId: job.sessionId, text });
+  }
 
   await postBrowserResponse({ sessionId: job.sessionId, text });
 }
@@ -117,7 +118,7 @@ async function processJob(job) {
 async function injectPrompt(message) {
   const input = findPromptInput();
   if (!input) {
-    throw new Error('Chat input not found. Reload the ChatGPT tab and try again.');
+    throw new Error('Chat input not found. Reload the AI chat tab and try again.');
   }
 
   input.focus();
@@ -228,38 +229,55 @@ async function clickSendWhenReady() {
     await sleep(SEND_RETRY_MS);
   }
 
-  throw new Error('Send button stayed disabled. ChatGPT did not accept the injected prompt.');
+  throw new Error('Send button stayed disabled. The page did not accept the injected prompt.');
 }
 
 function findSendButton() {
-  return (
-    document.querySelector('#composer-submit-button') ??
-    document.querySelector('button[data-testid="send-button"]') ??
-    document.querySelector('button[aria-label="Send prompt"]') ??
-    document.querySelector('button.composer-submit-button-color')
-  );
+  if (!provider) {
+    return null;
+  }
+  return queryFirst(provider.selectors.send);
 }
 
-async function waitForPlainResponse(beforeCount, mode) {
-  const text = await waitForAssistantText(beforeCount, mode);
+async function waitForPlainResponse(beforeCount, mode, sessionId) {
+  const text = await waitForAssistantText(beforeCount, mode, sessionId);
   if (!text) {
     throw new Error('No assistant response detected.');
   }
   return text;
 }
 
-async function waitForAssistantText(beforeCount, mode) {
+async function waitForAssistantText(beforeCount, mode, sessionId) {
   const deadline = Date.now() + RESPONSE_TIMEOUT_MS;
   let lastText = '';
   let stableSince = 0;
+  let lastChunkText = '';
+  let lastChunkAt = 0;
 
   while (Date.now() < deadline) {
     const text = getLatestAssistantText(beforeCount, mode === 'agent');
     if (text) {
+      if (mode === 'ask' && sessionId && shouldPostChunk(text, lastChunkText, lastChunkAt)) {
+        await postBrowserChunk({ sessionId, text });
+        lastChunkText = text;
+        lastChunkAt = Date.now();
+      }
+
       const stableMs = getStableMs(text, mode);
       if (text === lastText) {
-        if (Date.now() - stableSince >= stableMs) {
-          return text;
+        if (Date.now() - stableSince >= stableMs && canFinishResponse()) {
+          await sleep(FINISH_RECHECK_MS);
+          const recheck = getLatestAssistantText(beforeCount, mode === 'agent');
+          if (recheck && recheck.length >= text.length && canFinishResponse()) {
+            if (mode === 'ask' && sessionId && recheck !== lastChunkText) {
+              await postBrowserChunk({ sessionId, text: recheck });
+            }
+            return recheck;
+          }
+          if (recheck && recheck !== text) {
+            lastText = recheck;
+            stableSince = Date.now();
+          }
         }
       } else {
         lastText = text;
@@ -269,12 +287,50 @@ async function waitForAssistantText(beforeCount, mode) {
     await sleep(POLL_MS);
   }
 
-  return lastText || null;
+  const finalText = getLatestAssistantText(beforeCount, mode === 'agent');
+  if (finalText && canFinishResponse()) {
+    return finalText;
+  }
+
+  return finalText || lastText || null;
+}
+
+function shouldPostChunk(text, lastChunkText, lastChunkAt) {
+  if (text === lastChunkText) {
+    return false;
+  }
+
+  if (text.length - lastChunkText.length >= CHUNK_MIN_CHARS) {
+    return true;
+  }
+
+  return Date.now() - lastChunkAt >= CHUNK_MIN_MS;
+}
+
+function canFinishResponse() {
+  return !isStillGenerating();
+}
+
+function isStillGenerating() {
+  if (!provider) {
+    return false;
+  }
+
+  if (queryFirst(provider.selectors.stop)) {
+    return true;
+  }
+
+  const streamingNode = document.querySelector('[data-is-streaming="true"], [data-is-streaming=""]');
+  if (streamingNode) {
+    return true;
+  }
+
+  return false;
 }
 
 function getStableMs(text, mode) {
   if (mode !== 'agent') {
-    return STABLE_MS;
+    return ASK_STABLE_MS;
   }
 
   const trimmed = text.trim();
@@ -304,6 +360,8 @@ function getLatestAssistantText(beforeCount, preferCodeBlock = false) {
   }
 
   const latest = responseNodes[responseNodes.length - 1];
+  latest.scrollIntoView({ block: 'end', behavior: 'instant' });
+
   if (preferCodeBlock) {
     const codeBlocks = [
       ...latest.querySelectorAll('pre code'),
@@ -319,25 +377,33 @@ function getLatestAssistantText(beforeCount, preferCodeBlock = false) {
     }
   }
 
-  return latest?.textContent?.trim() ?? null;
+  return extractMessageText(latest);
 }
 
-function collectAssistantNodes() {
-  const selectors = [
-    '[data-message-author-role="assistant"]',
-    '.markdown-new-styling',
-    '.markdown.prose',
-    'article[data-turn="assistant"]',
-  ];
+function extractMessageText(node) {
+  if (!provider) {
+    return node.textContent?.trim() ?? null;
+  }
 
-  for (const selector of selectors) {
-    const nodes = [...document.querySelectorAll(selector)];
-    if (nodes.length > 0) {
-      return nodes;
+  for (const selector of provider.selectors.markdown) {
+    const markdown = node.querySelector(selector);
+    if (markdown) {
+      const text = (markdown.innerText ?? markdown.textContent ?? '').trim();
+      if (text) {
+        return text;
+      }
     }
   }
 
-  return [];
+  const text = (node.innerText ?? node.textContent ?? '').trim();
+  return text || null;
+}
+
+function collectAssistantNodes() {
+  if (!provider) {
+    return [];
+  }
+  return queryAll(provider.selectors.assistant);
 }
 
 function countAssistantMessages() {
@@ -345,13 +411,22 @@ function countAssistantMessages() {
 }
 
 function findPromptInput() {
-  return (
-    document.querySelector('#prompt-textarea') ??
-    document.querySelector('div.ProseMirror#prompt-textarea[contenteditable="true"]') ??
-    document.querySelector('div.ProseMirror[contenteditable="true"]') ??
-    document.querySelector('textarea[placeholder*="Message"]') ??
-    document.querySelector('textarea[data-id="root"]')
-  );
+  if (!provider) {
+    return null;
+  }
+  return queryFirst(provider.selectors.input);
+}
+
+async function postBrowserChunk(body) {
+  try {
+    await fetch(`${BRIDGE_URL}/browser/chunk`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+  } catch {
+    // Chunk delivery is best-effort.
+  }
 }
 
 async function postBrowserResponse(body) {

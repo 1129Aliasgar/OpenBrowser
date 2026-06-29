@@ -94,6 +94,21 @@ export function notifySessionError(
   notifySession(sessionId, 'error', payload);
 }
 
+export function notifySessionChunk(
+  sessionId: string,
+  payload: { text: string },
+): void {
+  const clients = sessionClients.get(sessionId);
+  if (!clients) {
+    return;
+  }
+
+  const message = `event: chunk\ndata: ${JSON.stringify(payload)}\n\n`;
+  for (const client of clients) {
+    client.write(message);
+  }
+}
+
 function notifySession(
   sessionId: string,
   event: string,
