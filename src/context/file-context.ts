@@ -163,7 +163,8 @@ export function formatAgentContextJson(
     editingRules: [
       'Context files below include line numbers (format: "   1| code").',
       'For EDIT_FILE on an existing file: prefer startLine, endLine, and replace for partial edits.',
-      'For EDIT_FILE when the file does not exist yet: use CREATE_FILE or EDIT_FILE with a ```file:path``` block containing full content.',
+      'For code files (.js, .json, etc.): use ---OB_FILE_BEGIN: path--- ... ---OB_FILE_END--- blocks.',
+      'For README.md and .md files: use ONE ```markdown ... ``` fenced block (ask mode = draft only, agent mode = create file).',
       'Do not use EDIT_FILE on package.json after npm init — use CREATE_FILE with full package.json content instead.',
     ],
     contextFiles: files.map((file) => ({

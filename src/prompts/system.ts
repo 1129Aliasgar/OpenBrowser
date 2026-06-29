@@ -72,7 +72,63 @@ const EDIT_EXISTING_EXAMPLE = `{
   "conversationId": "<uuid-v4>"
 }`;
 
-export function buildAskSystemPrompt(): string {
+const README_MARKDOWN_EXAMPLE = `{
+  "operations": [
+    { "action": "CREATE_FILE", "path": "README.md" }
+  ],
+  "conversationId": "<uuid-v4>"
+}
+
+\`\`\`markdown
+# My Express API
+
+A simple Express.js API with sample endpoints.
+
+## Features
+
+- Sample users endpoint
+- Random joke endpoint
+
+## Getting Started
+
+\`\`\`bash
+npm install
+npm start
+\`\`\`
+\`\`\``;
+
+export function isMarkdownDraftRequest(prompt: string): boolean {
+  return /\b(readme(?:\.md)?|\.md\b|markdown\s+file)\b/i.test(prompt);
+}
+
+export function buildAskSystemPrompt(options: { markdownDraft?: boolean } = {}): string {
+  if (options.markdownDraft) {
+    return [
+      'You are connected to OpenBrowser ask mode (markdown draft).',
+      '',
+      'The user wants to draft a README or .md file for manual copy — do NOT create files.',
+      '',
+      'Rules:',
+      '- Return ONE fenced code block with language tag markdown containing the full file source.',
+      '- Use real Markdown syntax: # headings, ## subheadings, - bullet lists, `inline code`, blank lines between sections.',
+      '- Do NOT return JSON or OpenBrowser operations.',
+      '- Do NOT format the README as chat preview (no citation cards, tables UI, or rendered GitHub-style layout).',
+      '- Put the entire file inside a single ```markdown ... ``` block so the user can copy it.',
+      '- Shell examples inside the README may use nested ```bash blocks inside the markdown block.',
+      '',
+      'Example shape:',
+      '```markdown',
+      '# Project Title',
+      '',
+      'Short description.',
+      '',
+      '## Features',
+      '',
+      '- Feature one',
+      '```',
+    ].join('\n');
+  }
+
   return [
     'You are connected to OpenBrowser, a local CLI coding assistant.',
     '',
@@ -93,7 +149,8 @@ export function buildAgentSystemPrompt(conversationId: string): string {
     '',
     'Return ONE message with two parts:',
     '',
-    '### PART 1 — JSON operations header',
+    '### PART 1 — JSON operations header (required first)',
+    '- Always start your reply with the JSON operations object.',
     '- Metadata only: paths, commands, line numbers.',
     '- Do NOT put file bodies inside JSON strings.',
     `- "conversationId" must be exactly: ${conversationId}`,
@@ -105,6 +162,7 @@ export function buildAgentSystemPrompt(conversationId: string): string {
     '- Do NOT use markdown ``` code fences for file content.',
     '- Do NOT use ChatGPT/Gemini file attachment UI, canvas, copy-code widgets, or download cards.',
     '- Write file content directly in the chat message as plain text between the markers.',
+    '- Put the BEGIN marker on its own line, then file source on following lines, then END on its own line.',
     '',
     'Block format:',
     `${OB_FILE_BEGIN} relative/path.ext---`,
@@ -116,15 +174,26 @@ export function buildAgentSystemPrompt(conversationId: string): string {
     '',
     '## CREATE_FILE rules',
     '- Use for new files (including package.json).',
-    `- Always include a matching ${OB_FILE_BEGIN} path--- block with complete content.`,
+    `- For code/config files (.js, .ts, .json, etc.): use ${OB_FILE_BEGIN} path--- blocks with complete content.`,
+    '- For README.md and any .md file: use ONE ```markdown fenced block (see below) — NOT OB_FILE blocks.',
     '- Prefer CREATE_FILE over EDIT_FILE for new projects.',
+    '',
+    '## Markdown files (.md, README) — copy-paste fence only',
+    '- When creating or rewriting README.md or any .md file:',
+    '  1) JSON: { "action": "CREATE_FILE", "path": "README.md" }',
+    '  2) Content: ONE ```markdown ... ``` block with full raw Markdown source after the JSON.',
+    '- The ```markdown block must be copy-pasteable plain text (# headings visible as characters).',
+    '- Do NOT use OB_FILE markers for .md files.',
+    '- Do NOT render the README as chat preview; write literal markdown source inside the fence.',
+    '- Use # / ## headings, - lists, `inline code`. Nested ```bash inside the markdown block is OK.',
+    '- To draft without creating a file, the user should use ask mode instead.',
     '',
     '## EDIT_FILE rules',
     `- If the file does NOT exist yet: use CREATE_FILE or EDIT_FILE with a ${OB_FILE_BEGIN} block (full content).`,
     '- If the file ALREADY exists (see project context with line numbers):',
     '  - Prefer partial edit: { "action": "EDIT_FILE", "path": "...", "startLine": N, "endLine": M, "replace": "single line or use \\\\n" }',
     '  - Or search/replace: { "search": "old", "replace": "new" }',
-    `- Or full rewrite: ${OB_FILE_BEGIN} path--- block with entire updated file`,
+    `- Or full rewrite: ${OB_FILE_BEGIN} path--- for code files, or \`\`\`markdown block for .md files`,
     `- For full file rewrites, prefer ${OB_FILE_BEGIN} blocks — do NOT put multiline code inside JSON "replace".`,
     '- Escape quotes in JSON strings (use \\" inside replace).',
     '- Do NOT use EDIT_FILE on package.json right after npm init — use CREATE_FILE with full package.json instead.',
@@ -132,13 +201,16 @@ export function buildAgentSystemPrompt(conversationId: string): string {
     '## Other rules',
     '- RUN_COMMAND runs in project root; use "cd folder && cmd" when needed.',
     '- Paths must be relative. No ../ traversal. No "..." placeholders.',
-    `- Every CREATE_FILE and every EDIT_FILE that needs full content must have a ${OB_FILE_BEGIN} block.`,
+    `- Every CREATE_FILE / EDIT_FILE that needs full content must include content: OB blocks for code files, \`\`\`markdown for .md files.`,
     '',
     '## Full example (new Express app)',
     HYBRID_EXPRESS_EXAMPLE,
     '',
     '## Example (edit existing file by line number)',
     EDIT_EXISTING_EXAMPLE,
+    '',
+    '## Example (README.md — use markdown fence, not OB_FILE)',
+    README_MARKDOWN_EXAMPLE,
   ].join('\n');
 }
 
@@ -186,15 +258,21 @@ function buildRetryFormatInstructions(conversationId: string): string {
     `conversationId: ${conversationId}`,
     '',
     'CREATE_FILE / new files:',
-    `- Use CREATE_FILE in JSON + ${OB_FILE_BEGIN} path--- with full plain-text source`,
+    `- Code files: CREATE_FILE in JSON + ${OB_FILE_BEGIN} path--- with full plain-text source`,
+    '- .md / README: CREATE_FILE in JSON + one ```markdown ... ``` block with full raw markdown source',
     '- Include package.json as CREATE_FILE (not EDIT_FILE) when scaffolding a new app',
     '',
     'EDIT_FILE:',
     `- File missing → CREATE_FILE or EDIT_FILE with full ${OB_FILE_BEGIN} content (file will be created)`,
     `- File exists → use startLine/endLine/replace OR search/replace OR full ${OB_FILE_BEGIN} rewrite`,
     '',
+    'Markdown (.md) files:',
+    '- Use ONE ```markdown fenced block with raw # heading source — NOT OB_FILE markers.',
+    '- Do NOT render README as chat preview.',
+    '',
     'Do NOT use:',
-    '- Markdown ``` code fences (OpenBrowser cannot capture them reliably)',
+    '- OB_FILE markers for .md files (use ```markdown instead)',
+    '- Markdown ``` fences for non-.md code files (use OB_FILE for .js, .json, etc.)',
     '- File attachment / canvas / copy-code UI',
     '- Bare code without OB_FILE markers',
     '- JSON-only operations without file blocks',

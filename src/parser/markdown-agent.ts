@@ -12,11 +12,15 @@ const PATH_PATTERN = '([a-zA-Z0-9_./-]+\\.[a-zA-Z0-9]+)';
 const PATH_FILE_RE = /[a-zA-Z0-9_./-]+\.[a-zA-Z0-9]+/;
 const OB_FILE_BEGIN = '---OB_FILE_BEGIN:';
 const OB_FILE_END = '---OB_FILE_END---';
+/** Path may include hyphens; newline after BEGIN delimiter is optional (Perplexity inline prose). */
 const OB_FILE_BLOCK_RE =
-  /---OB_FILE_BEGIN:\s*([^\n-]+?)---\s*\n([\s\S]*?)---OB_FILE_END---/gi;
+  /---OB_FILE_BEGIN:\s*([^\n]+?)---\s*([\s\S]*?)---OB_FILE_END---/gi;
 
 /** Detect markdown code fences when the model should use OB_FILE blocks. */
-export function detectCopyPasteBlocks(raw: string): string | null {
+export function detectCopyPasteBlocks(
+  raw: string,
+  options: { allowMarkdownFences?: boolean } = {},
+): string | null {
   if (!/```/.test(raw)) {
     return null;
   }
@@ -25,11 +29,85 @@ export function detectCopyPasteBlocks(raw: string): string | null {
     return null;
   }
 
+  if (options.allowMarkdownFences && hasMarkdownFence(raw)) {
+    return null;
+  }
+
   return [
-    'You used markdown code fences (```). OpenBrowser cannot capture those reliably from ChatGPT/Gemini UI.',
-    `Re-send using ONLY ${OB_FILE_BEGIN} relative/path--- ... ${OB_FILE_END} blocks with plain-text file content.`,
-    'Do NOT use ``` fences, file attachment UI, canvas, or copy-code widgets.',
+    'You used markdown code fences (```). For code files use OB_FILE blocks.',
+    `For .md files use ONE \`\`\`markdown ... \`\`\` block. For .js/.json use ${OB_FILE_BEGIN} ... ${OB_FILE_END}.`,
+    'Do NOT use file attachment UI, canvas, or copy-code widgets.',
   ].join(' ');
+}
+
+export function isMarkdownPath(filePath: string): boolean {
+  return /\.(md|markdown)$/i.test(normalizePath(filePath));
+}
+
+export function hasMarkdownFence(raw: string): boolean {
+  return (
+    /```(?:markdown|md)\s*\n/i.test(raw) ||
+    /```file:[^\n`]+\.md[\s\n]/i.test(raw) ||
+    /```\n#\s/m.test(raw)
+  );
+}
+
+export function extractMarkdownFenceBlocks(markdown: string): MarkdownFileBlock[] {
+  const blocks: MarkdownFileBlock[] = [];
+
+  for (const match of markdown.matchAll(/```file:([^\n`]+\.md)\s*\n([\s\S]*?)```/gi)) {
+    const path = normalizePath(match[1] ?? '');
+    const content = normalizeMultilineText((match[2] ?? '').trim());
+    if (path && content && !isOperationsJson(content)) {
+      blocks.push({ path, content });
+    }
+  }
+
+  for (const match of markdown.matchAll(/```(?:markdown|md)\s*\n([\s\S]*?)```/gi)) {
+    const content = normalizeMultilineText((match[1] ?? '').trim());
+    if (content && !isOperationsJson(content)) {
+      blocks.push({ path: '', content });
+    }
+  }
+
+  return blocks;
+}
+
+export function extractPrimaryMarkdownFence(raw: string): string | null {
+  const blocks = extractMarkdownFenceBlocks(raw);
+  if (blocks.length === 0) {
+    return null;
+  }
+
+  const best = blocks.reduce((longest, block) =>
+    block.content.length > longest.content.length ? block : longest,
+  );
+  return best.content;
+}
+
+export function extractMarkdownDraftContent(raw: string): string | null {
+  const fromFence = extractPrimaryMarkdownFence(raw);
+  if (fromFence) {
+    return fromFence;
+  }
+
+  const trimmed = raw.trim();
+  if (/^#\s/m.test(trimmed) && trimmed.length > 40) {
+    return trimmed;
+  }
+
+  return null;
+}
+
+export function operationsNeedMarkdownContent(
+  operations: { action: string; path?: string; content?: string }[],
+): boolean {
+  return operations.some(
+    (operation) =>
+      (operation.action === 'CREATE_FILE' || operation.action === 'EDIT_FILE') &&
+      isMarkdownPath(operation.path ?? '') &&
+      !operation.content?.trim(),
+  );
 }
 
 function normalizePath(filePath: string): string {
@@ -68,6 +146,21 @@ export function buildLlmCaptureText(parts: {
   return [parts.operationsJson.trim(), ...blocks].join('\n\n');
 }
 
+export function normalizeObFileCaptureText(raw: string): string {
+  const blocks = extractObFileBlocks(raw);
+  if (blocks.length === 0) {
+    return raw;
+  }
+
+  const beginIndex = raw.search(/---OB_FILE_BEGIN:/i);
+  const prefix = beginIndex > 0 ? raw.slice(0, beginIndex).trim() : '';
+  const serialized = blocks.map(
+    (block) => `${OB_FILE_BEGIN} ${block.path}---\n${block.content.trim()}\n${OB_FILE_END}`,
+  );
+
+  return [prefix, ...serialized].filter(Boolean).join('\n\n');
+}
+
 export function extractObFileBlocks(markdown: string): MarkdownFileBlock[] {
   const blocks = new Map<string, MarkdownFileBlock>();
 
@@ -96,6 +189,12 @@ export function extractFileBlocks(markdown: string): MarkdownFileBlock[] {
 
   for (const block of extractObFileBlocks(markdown)) {
     blocks.set(pathKey(block.path), block);
+  }
+
+  for (const block of extractMarkdownFenceBlocks(markdown)) {
+    if (block.path) {
+      blocks.set(pathKey(block.path), block);
+    }
   }
 
   for (const segment of extractOrderedContentSegments(markdown)) {
@@ -380,6 +479,48 @@ export function mergeFileBlocksIntoOperations<
   return mergePathMatchedSegments(merged, extractOrderedContentSegments(rawMarkdown));
 }
 
+export function mergeMarkdownFencesIntoOperations<
+  T extends { action: string; path?: string; content?: string },
+>(operations: T[], rawMarkdown: string): T[] {
+  const unlabeled = extractMarkdownFenceBlocks(rawMarkdown)
+    .filter((block) => !block.path)
+    .map((block) => block.content);
+
+  if (unlabeled.length === 0) {
+    return operations;
+  }
+
+  const pendingMd = operations
+    .map((operation, index) => ({ operation, index }))
+    .filter(
+      ({ operation }) =>
+        (operation.action === 'CREATE_FILE' || operation.action === 'EDIT_FILE') &&
+        isMarkdownPath(operation.path ?? '') &&
+        !operation.content?.trim(),
+    );
+
+  if (pendingMd.length === 0) {
+    return operations;
+  }
+
+  const result = [...operations];
+  const sortedFences = [...unlabeled].sort((a, b) => b.length - a.length);
+
+  if (sortedFences.length === 1) {
+    for (const { operation, index } of pendingMd) {
+      result[index] = { ...operation, content: sortedFences[0]! };
+    }
+    return result;
+  }
+
+  for (let i = 0; i < pendingMd.length && i < sortedFences.length; i += 1) {
+    const { operation, index } = pendingMd[i]!;
+    result[index] = { ...operation, content: sortedFences[i]! };
+  }
+
+  return result;
+}
+
 function mergePathMatchedSegments<T extends { action: string; path?: string; content?: string }>(
   operations: T[],
   segments: ContentSegment[],
@@ -462,17 +603,19 @@ export function validateMergedFileOperations(
   for (const operation of operations) {
     if (operation.action === 'CREATE_FILE') {
       if (!operation.content?.trim()) {
-        throw new Error(
-          `Missing content for ${operation.path}. Add an OpenBrowser file block: ${OB_FILE_BEGIN} ${operation.path}--- ... ${OB_FILE_END} (path must match exactly).`,
-        );
+        const mdHint = isMarkdownPath(operation.path ?? '')
+          ? 'Add ONE ```markdown ... ``` fenced block with full raw markdown source after the JSON.'
+          : `Add an OpenBrowser file block: ${OB_FILE_BEGIN} ${operation.path}--- ... ${OB_FILE_END} (path must match exactly).`;
+        throw new Error(`Missing content for ${operation.path}. ${mdHint}`);
       }
     }
 
     if (operation.action === 'EDIT_FILE') {
       if (!hasEditPayload(operation)) {
-        throw new Error(
-          `Missing content for ${operation.path}. Use ${OB_FILE_BEGIN} ${operation.path}--- with full content, or startLine/endLine/replace for partial edits.`,
-        );
+        const mdHint = isMarkdownPath(operation.path ?? '')
+          ? 'Use a ```markdown ... ``` block with full content, or startLine/endLine/replace for partial edits.'
+          : `Use ${OB_FILE_BEGIN} ${operation.path}--- with full content, or startLine/endLine/replace for partial edits.`;
+        throw new Error(`Missing content for ${operation.path}. ${mdHint}`);
       }
     }
 

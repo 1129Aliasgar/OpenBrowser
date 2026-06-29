@@ -57,10 +57,18 @@ export class AnswerStream {
     }
   }
 
-  finish(text: string): void {
+  finish(text: string, options: { rewriteIfLonger?: boolean } = {}): void {
     this.stopSpinner();
 
     if (this.streamed) {
+      if (options.rewriteIfLonger && text.length > this.writtenLength + 80) {
+        process.stdout.write(`\n${SEPARATOR}\n`);
+        process.stdout.write(text);
+        process.stdout.write(`\n${SEPARATOR}\n`);
+        this.writtenLength = text.length;
+        return;
+      }
+
       this.onChunk(text);
       process.stdout.write(`\n${SEPARATOR}\n`);
       return;

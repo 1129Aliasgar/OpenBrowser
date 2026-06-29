@@ -21,7 +21,9 @@ import {
   buildAskSystemPrompt,
   buildAgentCompactRetryMessage,
   buildFullMessage,
+  isMarkdownDraftRequest,
 } from './prompts/system.js';
+import { extractMarkdownDraftContent } from './parser/markdown-agent.js';
 import { startServer } from './server/index.js';
 import { AgentStepTracker, AnswerStream, formatError, type TrackerStep } from './shared/index.js';
 
@@ -124,8 +126,8 @@ async function chooseMode(
   rl: readline.Interface,
 ): Promise<'ask' | 'agent' | 'exit'> {
   output.write('\nSelect mode:\n');
-  output.write('  1. ask\n');
-  output.write('  2. agent\n');
+  output.write('  1. ask (chat / draft README & .md for manual copy)\n');
+  output.write('  2. agent (create & edit project files)\n');
   output.write('  q. exit\n');
 
   while (true) {
@@ -186,11 +188,11 @@ interface RunOptions {
 async function runAsk(prompt: string, options: RunOptions = {}): Promise<void> {
   const tracker = new AgentStepTracker();
   const conversationId = crypto.randomUUID();
-  const systemPrompt = buildAskSystemPrompt();
-
   const { cleanPrompt, paths } = parseAtRefs(prompt);
   const contextPaths = [...new Set([...(options.contextPaths ?? []), ...paths])];
   const userPrompt = cleanPrompt || prompt;
+  const markdownDraft = isMarkdownDraftRequest(userPrompt);
+  const systemPrompt = buildAskSystemPrompt({ markdownDraft });
 
   let contextBlock = '';
   if (contextPaths.length > 0) {
@@ -208,8 +210,11 @@ async function runAsk(prompt: string, options: RunOptions = {}): Promise<void> {
 
   const message = buildFullMessage('ask', systemPrompt, userPrompt, contextBlock);
 
-  tracker.step('reading browser', 'sending prompt to ChatGPT');
+  tracker.step('reading browser', markdownDraft ? 'sending markdown draft to browser' : 'sending prompt to ChatGPT');
   output.write('\nSending to browser AI (open ChatGPT with the extension loaded)...\n');
+  if (markdownDraft) {
+    output.write('Draft mode: AI will return a ```markdown block for you to copy manually.\n');
+  }
 
   const stream = new AnswerStream();
   stream.startWaiting();
@@ -220,6 +225,7 @@ async function runAsk(prompt: string, options: RunOptions = {}): Promise<void> {
     systemPrompt,
     message,
     conversationId,
+    markdownDraft,
   });
 
   try {
@@ -227,8 +233,24 @@ async function runAsk(prompt: string, options: RunOptions = {}): Promise<void> {
       onChunk: (text) => stream.onChunk(text),
     });
 
-    tracker.complete('ask response received');
-    stream.finish(answer || '(empty response)');
+    tracker.complete(markdownDraft ? 'markdown draft received' : 'ask response received');
+    stream.finish(answer || '(empty response)', { rewriteIfLonger: markdownDraft });
+
+    if (markdownDraft && answer?.trim()) {
+      const draft = extractMarkdownDraftContent(answer);
+      if (draft && draft.length > 0) {
+        output.write('\n--- Markdown draft (full copy — browser or below) ---\n\n');
+        output.write(draft);
+        output.write('\n\n--- End draft ---\n');
+      } else {
+        output.write(
+          '\nCould not extract markdown draft from capture. Copy the ```markdown code block from the browser.\n',
+        );
+      }
+      output.write(
+        '\nTo create the file in your project, switch to agent mode and say: create README.md\n',
+      );
+    }
   } catch (error) {
     output.write(`\nAsk error: ${formatError(error)}\n`);
   }
@@ -307,6 +329,10 @@ async function runAgent(task: string, options: RunOptions = {}): Promise<void> {
       }
 
       const operations = payload.operations ?? [];
+      const hasMarkdownCreate = operations.some(
+        (op) => op.action === 'CREATE_FILE' && /\.md$/i.test(op.path ?? ''),
+      );
+
       const plans = await planOperations(operations, process.cwd());
 
       for (const plan of plans) {
@@ -317,6 +343,12 @@ async function runAgent(task: string, options: RunOptions = {}): Promise<void> {
       if (!approved) {
         tracker.complete('rejected');
         return;
+      }
+
+      if (hasMarkdownCreate) {
+        output.write(
+          '\nNote: README/.md content was captured from a ```markdown code block in the browser.\n',
+        );
       }
 
       await executeOperations(operations, process.cwd(), {

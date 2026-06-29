@@ -4,7 +4,10 @@ import {
   detectCopyPasteBlocks,
   extractFileBlocks,
   mergeFileBlocksIntoOperations,
+  mergeMarkdownFencesIntoOperations,
+  normalizeObFileCaptureText,
   normalizeOperationTextFields,
+  operationsNeedMarkdownContent,
   validateMergedFileOperations,
 } from './markdown-agent.js';
 import { FileOperation } from '../core/types/index.js';
@@ -17,13 +20,19 @@ export function parseAIResponse(
   raw: string,
   options: ParseAIResponseOptions = {},
 ): AIResponsePayload {
-  const extracted = extractJsonFromText(raw);
-  const parsed = parseAgentJson(extracted);
+  const operationsJson = extractOperationsJsonFromText(raw);
+  const parsed = parseAgentJson(operationsJson);
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
     throw new Error('Response is not a JSON object');
   }
 
   const payload = { ...(parsed as Record<string, unknown>) };
+  if (!Array.isArray(payload.operations) || payload.operations.length === 0) {
+    throw new Error(
+      'Missing JSON operations header in captured response. Include { "operations": [...], "conversationId": "..." } before file content.',
+    );
+  }
+
   if (options.conversationId) {
     payload.conversationId = options.conversationId;
   }
@@ -35,17 +44,21 @@ export function parseAIResponse(
     throw new Error(formatValidationError(error));
   }
 
-  const copyPasteError = detectCopyPasteBlocks(raw);
+  const rawText = /---OB_FILE_BEGIN:/i.test(raw) ? normalizeObFileCaptureText(raw) : raw;
+  const operations = (validated.operations ?? []) as unknown as FileOperation[];
+
+  const copyPasteError = detectCopyPasteBlocks(rawText, {
+    allowMarkdownFences: operationsNeedMarkdownContent(operations),
+  });
   if (copyPasteError) {
     throw new Error(copyPasteError);
   }
 
-  const fileBlocks = extractFileBlocks(raw);
+  const fileBlocks = extractFileBlocks(rawText);
   const mergedOps = normalizeOperationTextFields(
-    mergeFileBlocksIntoOperations(
-      (validated.operations ?? []) as unknown as FileOperation[],
-      fileBlocks,
-      raw,
+    mergeMarkdownFencesIntoOperations(
+      mergeFileBlocksIntoOperations(operations, fileBlocks, rawText),
+      rawText,
     ),
   );
   validateMergedFileOperations(mergedOps);
@@ -89,7 +102,7 @@ function buildJsonCandidates(extracted: string): string[] {
   return [...unique];
 }
 
-function extractJsonFromText(raw: string): string {
+function extractOperationsJsonFromText(raw: string): string {
   const trimmed = stripJsonFence(raw).trim();
   const candidates = findAllJsonObjects(trimmed);
 
@@ -108,13 +121,9 @@ function extractJsonFromText(raw: string): string {
     return best;
   }
 
-  const start = trimmed.indexOf('{');
-  if (start === -1) {
-    return trimmed;
-  }
-
-  const balanced = extractBalancedJson(trimmed, start);
-  return balanced ?? trimmed.slice(start);
+  throw new Error(
+    'Missing JSON operations header in captured response. Include { "operations": [...], "conversationId": "..." } before file content. If you only sent a README markdown block, use ask mode to draft or include the operations JSON in agent mode.',
+  );
 }
 
 function findAllJsonObjects(text: string): string[] {

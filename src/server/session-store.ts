@@ -15,6 +15,7 @@ export interface PromptSession {
   systemPrompt: string;
   message: string;
   conversationId: string;
+  markdownDraft?: boolean;
   status: SessionStatus;
   response?: string;
   partialText?: string;
@@ -30,6 +31,7 @@ export interface CreateSessionInput {
   systemPrompt: string;
   message: string;
   conversationId: string;
+  markdownDraft?: boolean;
 }
 
 const sessions = new Map<string, PromptSession>();
@@ -42,6 +44,7 @@ export function createSession(input: CreateSessionInput): PromptSession {
     systemPrompt: input.systemPrompt,
     message: input.message,
     conversationId: input.conversationId,
+    markdownDraft: input.markdownDraft,
     status: 'pending',
     createdAt: new Date().toISOString(),
   };

@@ -9,6 +9,7 @@ export interface SubmitPromptInput {
   systemPrompt: string;
   message: string;
   conversationId: string;
+  markdownDraft?: boolean;
 }
 
 export interface SessionStatusResponse {

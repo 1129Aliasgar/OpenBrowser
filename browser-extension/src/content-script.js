@@ -1,6 +1,7 @@
 const RESPONSE_TIMEOUT_MS = 180_000;
 const STABLE_MS = 2_000;
 const ASK_STABLE_MS = 3_000;
+const ASK_DRAFT_STABLE_MS = 5_000;
 const POLL_MS = 400;
 const CHUNK_MIN_CHARS = 24;
 const CHUNK_MIN_MS = 250;
@@ -149,7 +150,9 @@ async function processJob(job) {
   await injectPrompt(job.message);
   await clickSendWhenReady();
 
-  const text = await waitForPlainResponse(beforeCount, job.mode, job.sessionId);
+  const text = await waitForPlainResponse(beforeCount, job.mode, job.sessionId, {
+    markdownDraft: job.markdownDraft,
+  });
   if (job.mode === 'ask' && job.sessionId) {
     await postBrowserChunk({ sessionId: job.sessionId, text });
   }
@@ -325,35 +328,43 @@ function findSendButton() {
   return queryFirst(provider.selectors.send);
 }
 
-async function waitForPlainResponse(beforeCount, mode, sessionId) {
-  const text = await waitForAssistantText(beforeCount, mode, sessionId);
+async function waitForPlainResponse(beforeCount, mode, sessionId, options = {}) {
+  const text = await waitForAssistantText(beforeCount, mode, sessionId, options);
   if (!text) {
     throw new Error('No assistant response detected.');
   }
   return text;
 }
 
-async function waitForAssistantText(beforeCount, mode, sessionId) {
+async function waitForAssistantText(beforeCount, mode, sessionId, options = {}) {
+  const markdownDraft = options.markdownDraft === true;
   const deadline = Date.now() + RESPONSE_TIMEOUT_MS;
   let lastText = '';
   let stableSince = 0;
   let lastChunkText = '';
   let lastChunkAt = 0;
+  let lastPreLength = 0;
 
   while (Date.now() < deadline) {
-    const text = getLatestAssistantText(beforeCount, mode === 'agent');
+    const text = getLatestAssistantText(beforeCount, mode === 'agent', { markdownDraft });
     if (text) {
+      const preLength = markdownDraft ? measureMarkdownPreLength(beforeCount) : 0;
+      if (markdownDraft && preLength > lastPreLength) {
+        lastPreLength = preLength;
+        stableSince = Date.now();
+      }
+
       if (mode === 'ask' && sessionId && shouldPostChunk(text, lastChunkText, lastChunkAt)) {
         await postBrowserChunk({ sessionId, text });
         lastChunkText = text;
         lastChunkAt = Date.now();
       }
 
-      const stableMs = getStableMs(text, mode);
+      const stableMs = getStableMs(text, mode, markdownDraft);
       if (text === lastText) {
         if (Date.now() - stableSince >= stableMs && canFinishResponse()) {
           await sleep(FINISH_RECHECK_MS);
-          const recheck = getLatestAssistantText(beforeCount, mode === 'agent');
+          const recheck = getLatestAssistantText(beforeCount, mode === 'agent', { markdownDraft });
           if (recheck && recheck.length >= text.length && canFinishResponse()) {
             if (mode === 'ask' && sessionId && recheck !== lastChunkText) {
               await postBrowserChunk({ sessionId, text: recheck });
@@ -373,7 +384,7 @@ async function waitForAssistantText(beforeCount, mode, sessionId) {
     await sleep(POLL_MS);
   }
 
-  const finalText = getLatestAssistantText(beforeCount, mode === 'agent');
+  const finalText = getLatestAssistantText(beforeCount, mode === 'agent', { markdownDraft });
   if (finalText && canFinishResponse()) {
     return finalText;
   }
@@ -414,7 +425,11 @@ function isStillGenerating() {
   return false;
 }
 
-function getStableMs(text, mode) {
+function getStableMs(text, mode, markdownDraft = false) {
+  if (mode === 'ask' && markdownDraft) {
+    return ASK_DRAFT_STABLE_MS;
+  }
+
   if (mode !== 'agent') {
     return ASK_STABLE_MS;
   }
@@ -456,8 +471,17 @@ function agentResponseNeedsMoreContent(text) {
 
       const hasBlock =
         blocks.some((block) => block.path === path) ||
+        new RegExp(`---OB_FILE_BEGIN:\\s*${escapeRegex(path)}---`, 'i').test(text) ||
+        (/\.md$/i.test(path) &&
+          (/```(?:markdown|md)\s*\n/i.test(text) ||
+            /```\n#\s/m.test(text) ||
+            /"operations"\s*:\s*\[/.test(text))) ||
         new RegExp(`\`\`\`file:${escapeRegex(path)}`, 'i').test(text) ||
         new RegExp(`\`\`\`${escapeRegex(path)}`, 'i').test(text);
+
+      if (!hasBlock && /\.md$/i.test(path) && !/"operations"\s*:\s*\[/.test(text)) {
+        return true;
+      }
 
       if (!hasBlock) {
         return true;
@@ -495,30 +519,152 @@ function extractJsonObject(text) {
   return text.slice(start);
 }
 
-function getLatestAssistantText(beforeCount, agentMode = false) {
+function getCaptureRoot(node) {
+  return (
+    node.querySelector?.('.prose[data-renderer="lm"]') ??
+    (node.classList?.contains('prose') ? node : null) ??
+    node
+  );
+}
+
+function collectMarkdownPreContents(captureRoot) {
+  const blocks = [];
+  for (const pre of captureRoot.querySelectorAll('pre')) {
+    const code = pre.querySelector('code') ?? pre;
+    const content = (code.textContent ?? '').replace(/\n$/, '').trim();
+    if (!content || looksLikeOperationsJson(content)) {
+      continue;
+    }
+    if (looksLikeMarkdownPre(pre, content) || /^#\s/m.test(content)) {
+      blocks.push(content);
+    }
+  }
+  return blocks;
+}
+
+function measureMarkdownPreLength(beforeCount) {
+  const nodes = collectAssistantNodes().slice(beforeCount);
+  let total = 0;
+  for (const node of nodes) {
+    for (const content of collectMarkdownPreContents(getCaptureRoot(node))) {
+      total += content.length;
+    }
+  }
+  return total;
+}
+
+function extractOperationsJsonFromNode(captureRoot, fullText) {
+  for (const pre of captureRoot.querySelectorAll('pre')) {
+    const code = pre.querySelector('code') ?? pre;
+    const content = (code.textContent ?? '').trim();
+    if (content && looksLikeOperationsJson(content)) {
+      return content;
+    }
+  }
+
+  const fromText = extractJsonObject(fullText ?? '');
+  if (fromText && looksLikeOperationsJson(fromText)) {
+    return fromText.trim();
+  }
+
+  return null;
+}
+
+function buildAskCaptureText(node) {
+  const captureRoot = getCaptureRoot(node);
+  const markdownBlocks = collectMarkdownPreContents(captureRoot);
+
+  if (markdownBlocks.length > 0) {
+    const best = [...markdownBlocks].sort((a, b) => b.length - a.length)[0];
+    return `\`\`\`markdown\n${best}\n\`\`\``;
+  }
+
+  return extractMessageText(node) ?? '';
+}
+
+function getLatestAssistantText(beforeCount, agentMode = false, options = {}) {
   const responseNodes = collectAssistantNodes();
   if (responseNodes.length <= beforeCount) {
     return null;
   }
 
-  const latest = responseNodes[responseNodes.length - 1];
+  const newNodes = responseNodes.slice(beforeCount);
+  const latest = newNodes[newNodes.length - 1];
   latest.scrollIntoView({ block: 'end', behavior: 'instant' });
 
   if (!agentMode) {
-    return extractMessageText(latest);
+    const captured = newNodes.map((node) => buildAskCaptureText(node)).filter(Boolean).join('\n\n');
+    return captured || mergeAssistantTexts(newNodes);
+  }
+
+  const withObMarker = [...newNodes]
+    .reverse()
+    .find((node) => /---OB_FILE_BEGIN:/i.test(extractMessageText(node) ?? ''));
+
+  if (withObMarker) {
+    return buildAgentCaptureText(withObMarker);
+  }
+
+  if (newNodes.length > 1) {
+    const merged = mergeAssistantTexts(newNodes);
+    if (merged && /---OB_FILE_BEGIN:/i.test(merged)) {
+      return normalizeObFileCaptureText(merged);
+    }
   }
 
   return buildAgentCaptureText(latest);
 }
 
+function mergeAssistantTexts(nodes) {
+  return nodes
+    .map((node) => extractMessageText(node))
+    .filter(Boolean)
+    .join('\n\n');
+}
+
+const OB_FILE_BLOCK_CAPTURE_RE =
+  /---OB_FILE_BEGIN:\s*([^\n]+?)---\s*([\s\S]*?)---OB_FILE_END---/gi;
+
+function normalizeObFileCaptureText(text) {
+  const blocks = [];
+  for (const match of text.matchAll(OB_FILE_BLOCK_CAPTURE_RE)) {
+    const path = normalizeCapturePath((match[1] ?? '').trim());
+    const content = (match[2] ?? '').trim();
+    if (path && content) {
+      blocks.push({ path, content });
+    }
+  }
+
+  if (blocks.length === 0) {
+    return text;
+  }
+
+  const beginIndex = text.search(/---OB_FILE_BEGIN:/i);
+  const prefix = beginIndex > 0 ? text.slice(0, beginIndex).trim() : '';
+  const serialized = blocks.map(
+    (block) => `---OB_FILE_BEGIN: ${block.path}---\n${block.content}\n---OB_FILE_END---`,
+  );
+
+  return [prefix, ...serialized].filter(Boolean).join('\n\n');
+}
+
 function buildAgentCaptureText(node) {
-  const fullText = extractMessageText(node);
+  const captureRoot = getCaptureRoot(node);
+  let fullText = extractMessageText(captureRoot) ?? extractMessageText(node);
+
   if (fullText && /---OB_FILE_BEGIN:/i.test(fullText)) {
-    return fullText;
+    return normalizeObFileCaptureText(fullText);
   }
 
   const parts = [];
-  const pres = [...node.querySelectorAll('pre')];
+  const jsonParts = [];
+  const markdownPres = [];
+  const pres = [...captureRoot.querySelectorAll('pre')];
+
+  const opsFromNode = extractOperationsJsonFromNode(captureRoot, fullText);
+  if (opsFromNode) {
+    jsonParts.push(opsFromNode);
+  }
 
   for (const pre of pres) {
     const code = pre.querySelector('code') ?? pre;
@@ -528,11 +674,25 @@ function buildAgentCaptureText(node) {
     }
 
     if (looksLikeOperationsJson(content)) {
-      parts.push(content.trim());
+      const trimmed = content.trim();
+      if (!jsonParts.includes(trimmed)) {
+        parts.push(trimmed);
+        jsonParts.push(trimmed);
+      }
+      continue;
+    }
+
+    if (looksLikeMarkdownPre(pre, content)) {
+      markdownPres.push(content.trim());
       continue;
     }
 
     const path = findPathForPre(pre) ?? inferPathFromContent(content);
+    if (path && /\.md$/i.test(path)) {
+      markdownPres.push(content.trim());
+      continue;
+    }
+
     if (path) {
       parts.push(`---OB_FILE_BEGIN: ${path}---\n${content.trim()}\n---OB_FILE_END---`);
     } else {
@@ -540,11 +700,54 @@ function buildAgentCaptureText(node) {
     }
   }
 
+  if (jsonParts.length > 0 && markdownPres.length > 0 && jsonCreatesMdFile(jsonParts.join('\n'))) {
+    const mdContent = [...markdownPres].sort((a, b) => b.length - a.length)[0];
+    return `${jsonParts.join('\n\n')}\n\n\`\`\`markdown\n${mdContent}\n\`\`\``;
+  }
+
+  if (jsonParts.length > 0 && markdownPres.length === 0 && jsonCreatesMdFile(jsonParts.join('\n'))) {
+    return jsonParts.join('\n\n');
+  }
+
   if (parts.length > 0) {
     return parts.join('\n\n');
   }
 
+  if (fullText && /```(?:markdown|md)\s*\n/i.test(fullText)) {
+    return fullText;
+  }
+
+  if (fullText && looksLikeOperationsJson(extractJsonObject(fullText))) {
+    return fullText;
+  }
+
   return fullText;
+}
+
+function looksLikeMarkdownPre(pre, content) {
+  const code = pre.querySelector('code') ?? pre;
+  const className = code.className ?? '';
+  if (/language-(markdown|md)\b/i.test(className)) {
+    return true;
+  }
+
+  const text = content.trim();
+  return /^#\s/m.test(text) || (text.includes('## ') && text.includes('\n- '));
+}
+
+function jsonCreatesMdFile(jsonText) {
+  try {
+    const parsed = JSON.parse(extractJsonObject(jsonText));
+    return (
+      Array.isArray(parsed?.operations) &&
+      parsed.operations.some(
+        (operation) =>
+          operation?.action === 'CREATE_FILE' && /\.md$/i.test(operation.path ?? ''),
+      )
+    );
+  } catch {
+    return false;
+  }
 }
 
 function inferPathFromContent(content) {
@@ -596,12 +799,26 @@ function extractDomFileBlocks(node) {
 
 function extractDomFileBlocksFromText(text) {
   const blocks = [];
-  const obPattern = /---OB_FILE_BEGIN:\s*([^\n-]+?)---\s*\n([\s\S]*?)---OB_FILE_END---/gi;
-  for (const match of text.matchAll(obPattern)) {
+  for (const match of text.matchAll(OB_FILE_BLOCK_CAPTURE_RE)) {
     const path = normalizeCapturePath(match[1] ?? '');
     const content = (match[2] ?? '').trim();
     if (path && content) {
       blocks.push({ path, content });
+    }
+  }
+
+  for (const match of text.matchAll(/```file:([^\n`]+\.md)\s*\n([\s\S]*?)```/gi)) {
+    const path = normalizeCapturePath(match[1] ?? '');
+    const content = (match[2] ?? '').trim();
+    if (path && content) {
+      blocks.push({ path, content });
+    }
+  }
+
+  for (const match of text.matchAll(/```(?:markdown|md)\s*\n([\s\S]*?)```/gi)) {
+    const content = (match[1] ?? '').trim();
+    if (content) {
+      blocks.push({ path: '', content });
     }
   }
 

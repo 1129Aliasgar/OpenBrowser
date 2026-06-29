@@ -6,6 +6,7 @@ export interface BrowserJobEvent {
   mode: PromptSession['mode'];
   message: string;
   conversationId: string;
+  markdownDraft?: boolean;
 }
 
 interface SseClient {

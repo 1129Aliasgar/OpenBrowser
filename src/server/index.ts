@@ -109,6 +109,7 @@ export async function createBridgeServer(): Promise<FastifyInstance> {
       systemPrompt?: string;
       message?: string;
       conversationId?: string;
+      markdownDraft?: boolean;
     };
 
     if (!body.mode || !body.prompt || !body.systemPrompt || !body.message || !body.conversationId) {
@@ -121,6 +122,7 @@ export async function createBridgeServer(): Promise<FastifyInstance> {
       systemPrompt: body.systemPrompt,
       message: body.message,
       conversationId: body.conversationId,
+      markdownDraft: body.markdownDraft,
     });
 
     logger.info({ sessionId: session.id, mode: session.mode }, 'Prompt session queued');
@@ -130,6 +132,7 @@ export async function createBridgeServer(): Promise<FastifyInstance> {
       mode: session.mode,
       message: session.message,
       conversationId: session.conversationId,
+      markdownDraft: session.markdownDraft,
     });
 
     return { sessionId: session.id, status: session.status };
@@ -227,6 +230,7 @@ export async function createBridgeServer(): Promise<FastifyInstance> {
         mode: session.mode,
         message: session.message,
         conversationId: session.conversationId,
+        markdownDraft: session.markdownDraft,
       },
     };
   });
