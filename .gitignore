@@ -1,0 +1,8 @@
+node_modules/
+dist/
+.env
+.openbrowser/
+*.log
+.DS_Store
+coverage/
+.vitest/

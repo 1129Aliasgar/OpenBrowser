@@ -1,0 +1,30 @@
+body {
+  min-width: 240px;
+  margin: 0;
+  color: #172026;
+  background: #f7f8f8;
+  font: 14px/1.4 system-ui, sans-serif;
+}
+
+main {
+  padding: 14px;
+}
+
+h1 {
+  margin: 0 0 8px;
+  font-size: 16px;
+}
+
+p {
+  margin: 0 0 12px;
+}
+
+button {
+  width: 100%;
+  border: 1px solid #9aa6ac;
+  border-radius: 6px;
+  background: #ffffff;
+  color: #172026;
+  cursor: pointer;
+  padding: 8px 10px;
+}
