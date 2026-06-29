@@ -31,16 +31,21 @@ async function refreshStatus() {
   bridgeStatus.textContent = 'Checking bridge...';
   setDot(bridgeDot, 'pending');
 
-  const [bridgeOk, tabs, activeTab] = await Promise.all([
+  const [bridgeOk, workerStatus, tabs, activeTab] = await Promise.all([
     checkBridge(),
+    checkWorker(),
     chrome.tabs.query({ url: URL_PATTERNS }),
     chrome.tabs.query({ active: true, currentWindow: true }),
   ]);
 
-  if (bridgeOk) {
+  if (bridgeOk && workerStatus?.sseConnected) {
     setDot(bridgeDot, 'online');
     bridgeStatus.textContent = 'Connected';
-    bridgeMeta.textContent = BRIDGE_URL;
+    bridgeMeta.textContent = `${BRIDGE_URL} · SSE active · ${workerStatus.readyTabs} tab(s)`;
+  } else if (bridgeOk) {
+    setDot(bridgeDot, 'pending');
+    bridgeStatus.textContent = 'Bridge up, extension connecting...';
+    bridgeMeta.textContent = `${BRIDGE_URL} · reload AI tab if jobs do not arrive`;
   } else {
     setDot(bridgeDot, 'offline');
     bridgeStatus.textContent = 'Offline';
@@ -80,6 +85,14 @@ async function checkBridge() {
     return true;
   } catch {
     return false;
+  }
+}
+
+async function checkWorker() {
+  try {
+    return await chrome.runtime.sendMessage({ type: 'OPENBROWSER_PING' });
+  } catch {
+    return null;
   }
 }
 

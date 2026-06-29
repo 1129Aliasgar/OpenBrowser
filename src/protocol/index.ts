@@ -6,6 +6,7 @@ const operationActions = [
   'DELETE_FILE',
   'RENAME_FILE',
   'CREATE_FOLDER',
+  'RUN_COMMAND',
 ] as const;
 
 const relativePathSchema = z
@@ -21,29 +22,40 @@ const relativePathSchema = z
 
 export const operationSchema = z.object({
   action: z.enum(operationActions),
-  path: relativePathSchema,
+  path: relativePathSchema.optional(),
   content: z.string().optional(),
   search: z.string().optional(),
   replace: z.string().optional(),
+  startLine: z.number().int().positive().optional(),
+  endLine: z.number().int().positive().optional(),
+  command: z.string().optional(),
 }).superRefine((operation, ctx) => {
-  if (operation.action === 'CREATE_FILE' && operation.content === undefined) {
+  if (operation.action === 'RUN_COMMAND') {
+    if (!operation.command?.trim()) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'RUN_COMMAND requires command',
+        path: ['command'],
+      });
+    }
+    return;
+  }
+
+  if (!operation.path) {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
-      message: 'CREATE_FILE requires content',
-      path: ['content'],
+      message: 'path is required for file operations',
+      path: ['path'],
     });
+    return;
   }
 
   if (
-    operation.action === 'EDIT_FILE' &&
-    operation.content === undefined &&
-    (operation.search === undefined || operation.replace === undefined)
+    (operation.action === 'CREATE_FILE' || operation.action === 'EDIT_FILE') &&
+    operation.content === undefined
   ) {
-    ctx.addIssue({
-      code: z.ZodIssueCode.custom,
-      message: 'EDIT_FILE requires content or search and replace',
-      path: ['content'],
-    });
+    // Hybrid mode: content may arrive in markdown code blocks.
+    return;
   }
 
   if (operation.action === 'RENAME_FILE') {
@@ -97,4 +109,17 @@ export function validateAIResponse(payload: unknown): AIResponsePayload {
 
 export function validateOperations(payload: unknown): Operation[] {
   return z.array(operationSchema).parse(payload);
+}
+
+export function formatValidationError(error: unknown): string {
+  if (error instanceof z.ZodError) {
+    return error.issues
+      .map((issue) => {
+        const path = issue.path.length > 0 ? ` (${issue.path.join('.')})` : '';
+        return `${issue.message}${path}`;
+      })
+      .join('; ');
+  }
+
+  return error instanceof Error ? error.message : String(error);
 }

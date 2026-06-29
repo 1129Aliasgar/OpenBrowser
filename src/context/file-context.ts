@@ -154,6 +154,37 @@ export function formatContextJson(
   return JSON.stringify(payload, null, 2);
 }
 
+export function formatAgentContextJson(
+  files: ContextFile[],
+  projectSummary?: string,
+): string {
+  const payload = {
+    projectSummary: projectSummary ?? null,
+    editingRules: [
+      'Context files below include line numbers (format: "   1| code").',
+      'For EDIT_FILE on an existing file: prefer startLine, endLine, and replace for partial edits.',
+      'For EDIT_FILE when the file does not exist yet: use CREATE_FILE or EDIT_FILE with a ```file:path``` block containing full content.',
+      'Do not use EDIT_FILE on package.json after npm init — use CREATE_FILE with full package.json content instead.',
+    ],
+    contextFiles: files.map((file) => ({
+      path: file.path,
+      language: file.language,
+      truncated: file.truncated,
+      exists: true,
+      numberedContent: addLineNumbers(file.content),
+    })),
+  };
+
+  return JSON.stringify(payload, null, 2);
+}
+
+function addLineNumbers(content: string): string {
+  return content
+    .split('\n')
+    .map((line, index) => `${String(index + 1).padStart(4, ' ')}| ${line}`)
+    .join('\n');
+}
+
 function detectLanguage(filePath: string): string {
   const ext = path.extname(filePath).toLowerCase();
   const map: Record<string, string> = {

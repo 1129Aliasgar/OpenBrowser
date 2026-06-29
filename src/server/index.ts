@@ -10,6 +10,7 @@ import {
   addBrowserClient,
   broadcastBrowserJob,
   createSseStream,
+  writeCorsPreflight,
   addSessionClient,
   notifySessionComplete,
   notifySessionChunk,
@@ -39,10 +40,33 @@ export async function createBridgeServer(): Promise<FastifyInstance> {
   const app = Fastify({ logger: false });
 
   await app.register(cors, {
-    // Reflect request origin — allows ChatGPT tabs and chrome-extension:// popup.
     origin: true,
     methods: ['GET', 'POST', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization'],
+  });
+
+  app.addHook('onSend', async (_request, reply) => {
+    reply.header('Access-Control-Allow-Private-Network', 'true');
+  });
+
+  app.options('/browser/events', async (request, reply) => {
+    reply.hijack();
+    writeCorsPreflight(reply.raw, request.headers.origin);
+  });
+
+  app.options('/browser/claim', async (request, reply) => {
+    reply.hijack();
+    writeCorsPreflight(reply.raw, request.headers.origin);
+  });
+
+  app.options('/browser/chunk', async (request, reply) => {
+    reply.hijack();
+    writeCorsPreflight(reply.raw, request.headers.origin);
+  });
+
+  app.options('/browser/response', async (request, reply) => {
+    reply.hijack();
+    writeCorsPreflight(reply.raw, request.headers.origin);
   });
 
   app.addHook('preHandler', async (request) => {
@@ -139,12 +163,13 @@ export async function createBridgeServer(): Promise<FastifyInstance> {
 
     reply.hijack();
     const raw = reply.raw;
+    const origin = request.headers.origin;
 
     let heartbeat: ReturnType<typeof setInterval>;
     const client = createSseStream(raw, (closedClient) => {
       clearInterval(heartbeat);
       removeSessionClient(sessionId, closedClient);
-    });
+    }, origin);
 
     if (session.status === 'complete') {
       sendSseEvent(raw, 'complete', { response: session.response });
@@ -169,11 +194,12 @@ export async function createBridgeServer(): Promise<FastifyInstance> {
   app.get('/browser/events', async (request, reply) => {
     reply.hijack();
     const raw = reply.raw;
+    const origin = request.headers.origin;
 
     const client = createSseStream(raw, (closedClient) => {
       clearInterval(heartbeat);
       removeBrowserClient(closedClient);
-    });
+    }, origin);
 
     addBrowserClient(client);
     const heartbeat = setInterval(() => {

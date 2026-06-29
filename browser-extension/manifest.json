@@ -1,9 +1,9 @@
 {
   "manifest_version": 3,
   "name": "OpenBrowser Bridge",
-  "version": "0.5.0",
+  "version": "0.7.3",
   "description": "Connects browser AI chat pages to the local OpenBrowser bridge server.",
-  "permissions": ["activeTab", "scripting", "storage", "tabs"],
+  "permissions": ["activeTab", "alarms", "scripting", "storage", "tabs"],
   "host_permissions": [
     "http://127.0.0.1:5000/*",
     "https://chatgpt.com/*",
@@ -20,8 +20,7 @@
     "https://x.com/*"
   ],
   "background": {
-    "service_worker": "src/background.js",
-    "type": "module"
+    "service_worker": "src/background.js"
   },
   "content_scripts": [
     {

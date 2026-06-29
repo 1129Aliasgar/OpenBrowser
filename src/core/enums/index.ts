@@ -9,4 +9,5 @@ export enum FileOperationAction {
   DeleteFile = 'DELETE_FILE',
   RenameFile = 'RENAME_FILE',
   CreateFolder = 'CREATE_FOLDER',
+  RunCommand = 'RUN_COMMAND',
 }

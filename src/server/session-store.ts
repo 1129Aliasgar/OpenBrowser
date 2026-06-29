@@ -1,3 +1,5 @@
+import crypto from 'node:crypto';
+
 export type SessionMode = 'ask' | 'agent';
 
 export type SessionStatus =
@@ -34,7 +36,7 @@ const sessions = new Map<string, PromptSession>();
 
 export function createSession(input: CreateSessionInput): PromptSession {
   const session: PromptSession = {
-    id: input.conversationId,
+    id: crypto.randomUUID(),
     mode: input.mode,
     prompt: input.prompt,
     systemPrompt: input.systemPrompt,

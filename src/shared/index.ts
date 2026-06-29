@@ -19,6 +19,7 @@ export type TrackerStep =
   | 'deleting file'
   | 'renaming file'
   | 'creating folder'
+  | 'running command'
   | 'waiting'
   | 'complete';
 

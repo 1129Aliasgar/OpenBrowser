@@ -51,47 +51,36 @@ const OPENBROWSER_PROVIDERS = {
   perplexity: {
     name: 'Perplexity',
     hosts: ['www.perplexity.ai', 'perplexity.ai'],
+    inject: 'lexical',
     selectors: {
-      input: [
-        'textarea[placeholder*="Ask"]',
-        'textarea',
-        'div[contenteditable="true"]',
-      ],
+      input: ['#ask-input', 'div[data-lexical-editor="true"]#ask-input'],
       send: [
         'button[aria-label="Submit"]',
         'button[data-testid="submit-button"]',
         'button[type="submit"]',
+        'button[aria-label="Send"]',
       ],
-      assistant: [
-        '.prose',
-        '[class*="answer"]',
-        'main article',
-      ],
+      assistant: ['[id^="markdown-content-"]', '.prose[data-renderer="lm"]'],
       stop: ['button[aria-label="Stop"]', 'button[aria-label="Stop generating"]'],
-      markdown: ['.prose', '.markdown'],
+      markdown: ['.prose[data-renderer="lm"]', '[id^="markdown-content-"]'],
     },
   },
   glm: {
     name: 'GLM',
     hosts: ['chat.z.ai', 'glm.ai', 'open.bigmodel.cn'],
+    inject: 'textarea',
     selectors: {
-      input: [
-        'textarea',
-        'div[contenteditable="true"]',
-        '.ProseMirror[contenteditable="true"]',
-      ],
+      input: ['#chat-input', 'textarea#chat-input'],
       send: [
         'button[type="submit"]',
         'button[aria-label="Send"]',
         'button.send-btn',
+        'button[aria-label="Send message"]',
       ],
-      assistant: [
-        '.message-assistant',
-        '[class*="assistant"]',
-        '.markdown',
-      ],
-      stop: ['button[aria-label="Stop"]'],
-      markdown: ['.markdown', '.prose'],
+      assistant: ['.markdown-prose'],
+      stop: ['button[aria-label="Stop"]', 'button[aria-label="Stop generating"]'],
+      markdown: ['.markdown-prose'],
+      exclude: ['.thinking-chain-container'],
     },
   },
   grok: {

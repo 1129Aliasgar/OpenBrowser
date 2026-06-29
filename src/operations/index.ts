@@ -1,8 +1,12 @@
+import { exec } from 'node:child_process';
 import path from 'node:path';
+import { promisify } from 'node:util';
 import { createPatch } from 'diff';
 import fs from 'fs-extra';
 import type { FileOperation } from '../core/index.js';
 import { appendHistory } from '../memory/index.js';
+
+const execAsync = promisify(exec);
 
 export interface PlannedOperation {
   operation: FileOperation;
@@ -24,6 +28,19 @@ export async function planOperations(
   const plans: PlannedOperation[] = [];
 
   for (const operation of operations) {
+    if (operation.action === 'RUN_COMMAND') {
+      plans.push({
+        operation,
+        absolutePath: root,
+        diff: `RUN_COMMAND ${operation.command ?? ''}`,
+      });
+      continue;
+    }
+
+    if (!operation.path) {
+      throw new Error(`${operation.action} requires path`);
+    }
+
     const absolutePath = resolveInsideRoot(root, operation.path);
     plans.push({
       operation,
@@ -108,31 +125,57 @@ async function applyOperation(
   onStep?: (step: string, detail?: string) => void,
 ): Promise<void> {
   const { operation, absolutePath } = plan;
-  const relativePath = path.relative(projectRoot, absolutePath);
 
   switch (operation.action) {
-    case 'CREATE_FOLDER':
+    case 'RUN_COMMAND': {
+      const cwd = operation.path
+        ? resolveInsideRoot(projectRoot, operation.path)
+        : projectRoot;
+      onStep?.('running command', operation.command);
+      await runShellCommand(operation.command ?? '', cwd);
+      break;
+    }
+    case 'CREATE_FOLDER': {
+      const relativePath = path.relative(projectRoot, absolutePath);
       onStep?.('creating folder', relativePath);
       await fs.ensureDir(absolutePath);
       break;
-    case 'CREATE_FILE':
+    }
+    case 'CREATE_FILE': {
+      const relativePath = path.relative(projectRoot, absolutePath);
       onStep?.('creating file', relativePath);
       await fs.ensureDir(path.dirname(absolutePath));
       await fs.writeFile(absolutePath, operation.content ?? '');
       break;
+    }
     case 'EDIT_FILE': {
+      const relativePath = path.relative(projectRoot, absolutePath);
+      const exists = await fs.pathExists(absolutePath);
+      if (!exists) {
+        if (!operation.content?.trim()) {
+          throw new Error(
+            `EDIT_FILE on missing file ${relativePath} requires full content (file will be created)`,
+          );
+        }
+        onStep?.('creating file', `${relativePath} (via EDIT_FILE)`);
+        await fs.ensureDir(path.dirname(absolutePath));
+        await fs.writeFile(absolutePath, operation.content ?? '');
+        break;
+      }
+
       onStep?.('editing file', relativePath);
-      const before = (await fs.pathExists(absolutePath))
-        ? await fs.readFile(absolutePath, 'utf8')
-        : '';
+      const before = await fs.readFile(absolutePath, 'utf8');
       await fs.writeFile(absolutePath, nextContent(operation, before));
       break;
     }
-    case 'DELETE_FILE':
+    case 'DELETE_FILE': {
+      const relativePath = path.relative(projectRoot, absolutePath);
       onStep?.('deleting file', relativePath);
       await fs.remove(absolutePath);
       break;
+    }
     case 'RENAME_FILE': {
+      const relativePath = path.relative(projectRoot, absolutePath);
       onStep?.('renaming file', relativePath);
       if (!operation.replace) {
         throw new Error('RENAME_FILE requires replace as destination path');
@@ -147,7 +190,41 @@ async function applyOperation(
   }
 }
 
+async function runShellCommand(command: string, cwd: string): Promise<void> {
+  const trimmed = command.trim();
+  if (!trimmed) {
+    throw new Error('RUN_COMMAND is empty');
+  }
+
+  try {
+    const { stdout, stderr } = await execAsync(trimmed, {
+      cwd,
+      shell: process.platform === 'win32' ? process.env.COMSPEC ?? 'cmd.exe' : '/bin/sh',
+      timeout: 120_000,
+      maxBuffer: 2 * 1024 * 1024,
+    });
+
+    if (stdout.trim()) {
+      process.stdout.write(`${stdout.trim()}\n`);
+    }
+    if (stderr.trim()) {
+      process.stderr.write(`${stderr.trim()}\n`);
+    }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(`Command failed: ${message}`);
+  }
+}
+
 function nextContent(operation: FileOperation, before: string): string {
+  if (
+    operation.startLine !== undefined &&
+    operation.endLine !== undefined &&
+    operation.replace !== undefined
+  ) {
+    return applyLineEdit(before, operation.startLine, operation.endLine, operation.replace);
+  }
+
   if (operation.search !== undefined && operation.replace !== undefined) {
     if (!before.includes(operation.search)) {
       throw new Error(`Search text not found in ${operation.path}`);
@@ -159,7 +236,33 @@ function nextContent(operation: FileOperation, before: string): string {
     return operation.content;
   }
 
-  throw new Error(`${operation.action} requires content or search/replace`);
+  throw new Error(`${operation.action} requires content, line edit, or search/replace`);
+}
+
+function applyLineEdit(
+  before: string,
+  startLine: number,
+  endLine: number,
+  replacement: string,
+): string {
+  if (startLine < 1 || endLine < startLine) {
+    throw new Error(`Invalid line range ${startLine}-${endLine} for edit`);
+  }
+
+  const lines = before.split('\n');
+  if (startLine > lines.length + 1) {
+    throw new Error(`startLine ${startLine} is beyond end of file (${lines.length} lines)`);
+  }
+
+  const startIndex = startLine - 1;
+  const endIndex = Math.min(endLine, lines.length);
+  const replacementLines = replacement.split('\n');
+
+  return [
+    ...lines.slice(0, startIndex),
+    ...replacementLines,
+    ...lines.slice(endIndex),
+  ].join('\n');
 }
 
 function assertNever(value: never): never {

@@ -3,14 +3,18 @@ export type OperationAction =
   | 'EDIT_FILE'
   | 'DELETE_FILE'
   | 'RENAME_FILE'
-  | 'CREATE_FOLDER';
+  | 'CREATE_FOLDER'
+  | 'RUN_COMMAND';
 
 export interface FileOperation {
   action: OperationAction;
-  path: string;
+  path?: string;
   content?: string;
   search?: string;
   replace?: string;
+  startLine?: number;
+  endLine?: number;
+  command?: string;
 }
 
 export interface AIResponse {

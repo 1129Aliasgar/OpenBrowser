@@ -1,6 +1,7 @@
 export {
   CONTEXT_IGNORE,
   formatContextJson,
+  formatAgentContextJson,
   formatContextMarkdown,
   listContextChoices,
   loadContextFiles,

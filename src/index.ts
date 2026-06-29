@@ -1,24 +1,25 @@
 #!/usr/bin/env node
 import crypto from 'node:crypto';
 import readline from 'node:readline/promises';
+import type { Completer } from 'node:readline';
 import { stdin as input, stdout as output } from 'node:process';
 import { Command } from 'commander';
 import { submitPrompt, waitForSessionResponse } from './client/bridge-client.js';
 import {
-  formatContextJson,
+  formatAgentContextJson,
   formatContextMarkdown,
   generateContext,
+  getAtCompletion,
   listContextChoices,
   loadContextFiles,
   parseAtRefs,
-  readLineWithAtCompletion,
 } from './context/index.js';
 import { parseAIResponse } from './parser/index.js';
 import { executeOperations, planOperations } from './operations/index.js';
 import {
   buildAgentSystemPrompt,
   buildAskSystemPrompt,
-  buildAgentRetryMessage,
+  buildAgentCompactRetryMessage,
   buildFullMessage,
 } from './prompts/system.js';
 import { startServer } from './server/index.js';
@@ -75,7 +76,26 @@ async function withBridge<T>(callback: () => Promise<T>): Promise<T> {
 }
 
 async function runInteractive(): Promise<void> {
-  const rl = readline.createInterface({ input, output });
+  const choices = await listContextChoices(process.cwd());
+  const completer: Completer = (line) => {
+    const { completion } = getAtCompletion(line, choices);
+    if (!completion) {
+      return [[], line];
+    }
+
+    const atMatch = /(?:^|\s)@([^\s@]*)$/.exec(line);
+    const partial = atMatch?.[1] ?? '';
+    const atPos = line.lastIndexOf(`@${partial}`);
+    const completed = `${line.slice(0, atPos)}@${completion}`;
+    return [[completed], line];
+  };
+
+  const rl = readline.createInterface({
+    input,
+    output,
+    terminal: true,
+    completer,
+  });
 
   try {
     while (true) {
@@ -127,20 +147,11 @@ async function readPromptWithContext(
   rl: readline.Interface,
   mode: 'ask' | 'agent',
 ): Promise<{ prompt: string; contextPaths: string[] }> {
-  const choices = await listContextChoices(process.cwd());
-
   output.write('\nType @ for file suggestions (Tab to complete). Enter prompt when ready.\n');
 
   while (true) {
     const label = `${mode}> `;
-
-    rl.pause();
-    let line: string;
-    try {
-      line = (await readLineWithAtCompletion(label, choices)).trim();
-    } finally {
-      rl.resume();
-    }
+    const line = (await rl.question(label)).trim();
 
     if (!line) {
       continue;
@@ -228,7 +239,7 @@ async function runAgent(task: string, options: RunOptions = {}): Promise<void> {
   const projectSummary = await generateContext(process.cwd());
   const attachedFiles =
     contextPaths.length > 0 ? await loadContextFiles(process.cwd(), contextPaths) : [];
-  const context = formatContextJson(attachedFiles, projectSummary);
+  const context = formatAgentContextJson(attachedFiles, projectSummary);
 
   if (attachedFiles.length > 0) {
     output.write(`\nAttached ${attachedFiles.length} file(s) as JSON context.\n`);
@@ -263,7 +274,7 @@ async function runAgent(task: string, options: RunOptions = {}): Promise<void> {
       }
 
       output.write(`\nBrowser capture failed (${captureError}). Retrying...\n`);
-      message = buildAgentRetryMessage(message, captureError, conversationId);
+      message = buildAgentCompactRetryMessage(captureError, conversationId, userTask);
       continue;
     }
 
@@ -274,7 +285,7 @@ async function runAgent(task: string, options: RunOptions = {}): Promise<void> {
       }
 
       output.write('\nEmpty browser response. Retrying...\n');
-      message = buildAgentRetryMessage(message, 'Empty response from browser AI', conversationId);
+      message = buildAgentCompactRetryMessage('Empty response from browser AI', conversationId, userTask);
       continue;
     }
 
@@ -311,8 +322,8 @@ async function runAgent(task: string, options: RunOptions = {}): Promise<void> {
         return;
       }
 
-      output.write(`\nInvalid agent JSON (${validationError}). Retrying (${attempt}/${maxAttempts - 1})...\n`);
-      message = buildAgentRetryMessage(message, validationError, conversationId);
+      output.write(`\nInvalid agent response (${validationError}). Retrying (${attempt}/${maxAttempts - 1})...\n`);
+      message = buildAgentCompactRetryMessage(validationError, conversationId, userTask);
     }
   }
 }

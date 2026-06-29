@@ -1,5 +1,11 @@
 import { parse as parseJsonc } from 'jsonc-parser';
-import { validateAIResponse, type AIResponsePayload } from '../protocol/index.js';
+import { validateAIResponse, formatValidationError, type AIResponsePayload, type Operation } from '../protocol/index.js';
+import {
+  extractFileBlocks,
+  mergeFileBlocksIntoOperations,
+  validateMergedFileOperations,
+} from './markdown-agent.js';
+import { FileOperation } from '../core/types/index.js';
 
 export interface ParseAIResponseOptions {
   conversationId?: string;
@@ -20,7 +26,25 @@ export function parseAIResponse(
     payload.conversationId = options.conversationId;
   }
 
-  return validateAIResponse(payload);
+  let validated: AIResponsePayload;
+  try {
+    validated = validateAIResponse(payload);
+  } catch (error) {
+    throw new Error(formatValidationError(error));
+  }
+
+  const fileBlocks = extractFileBlocks(raw);
+  const mergedOps = mergeFileBlocksIntoOperations(
+    (validated.operations ?? []) as unknown as FileOperation[],
+    fileBlocks,
+    raw,
+  );
+  validateMergedFileOperations(mergedOps);
+
+  return {
+    ...validated,
+    operations: mergedOps as Operation[],
+  };
 }
 
 function parseAgentJson(extracted: string): unknown {
@@ -58,24 +82,32 @@ function buildJsonCandidates(extracted: string): string[] {
 
 function extractJsonFromText(raw: string): string {
   const trimmed = stripJsonFence(raw).trim();
-  if (trimmed.startsWith('{')) {
+  const start = trimmed.indexOf('{');
+  if (start === -1) {
     return trimmed;
   }
 
-  const start = trimmed.indexOf('{');
-  const end = trimmed.lastIndexOf('}');
-  if (start >= 0 && end > start) {
-    return trimmed.slice(start, end + 1);
+  let depth = 0;
+  for (let index = start; index < trimmed.length; index += 1) {
+    const char = trimmed[index];
+    if (char === '{') {
+      depth += 1;
+    } else if (char === '}') {
+      depth -= 1;
+      if (depth === 0) {
+        return trimmed.slice(start, index + 1);
+      }
+    }
   }
 
-  return trimmed;
+  return trimmed.slice(start);
 }
 
 function stripJsonFence(raw: string): string {
   const trimmed = raw.trim();
-  const fenced = /```(?:json)?\s*([\s\S]*?)\s*```/i.exec(trimmed);
-  if (fenced?.[1]) {
-    return fenced[1].trim();
+  const jsonOnly = /^```json\s*([\s\S]*?)\s*```$/i.exec(trimmed);
+  if (jsonOnly?.[1]) {
+    return jsonOnly[1].trim();
   }
   return trimmed;
 }

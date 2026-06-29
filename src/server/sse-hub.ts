@@ -15,6 +15,29 @@ interface SseClient {
 
 const browserClients = new Set<SseClient>();
 const sessionClients = new Map<string, Set<SseClient>>();
+const pendingBrowserJobs: BrowserJobEvent[] = [];
+
+export function applyCorsHeaders(
+  raw: ServerResponse,
+  origin?: string,
+): void {
+  if (origin) {
+    raw.setHeader('Access-Control-Allow-Origin', origin);
+    raw.setHeader('Vary', 'Origin');
+  } else {
+    raw.setHeader('Access-Control-Allow-Origin', '*');
+  }
+
+  raw.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+  raw.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+  raw.setHeader('Access-Control-Allow-Private-Network', 'true');
+}
+
+export function writeCorsPreflight(raw: ServerResponse, origin?: string): void {
+  applyCorsHeaders(raw, origin);
+  raw.writeHead(204);
+  raw.end();
+}
 
 export function sendSseEvent(
   raw: ServerResponse,
@@ -28,12 +51,13 @@ export function sendSseEvent(
 export function createSseStream(
   raw: ServerResponse,
   onClose: (client: SseClient) => void,
+  origin?: string,
 ): SseClient {
+  applyCorsHeaders(raw, origin);
   raw.writeHead(200, {
     'Content-Type': 'text/event-stream',
     'Cache-Control': 'no-cache',
     Connection: 'keep-alive',
-    'Access-Control-Allow-Origin': '*',
   });
 
   const client: SseClient = {
@@ -49,6 +73,14 @@ export function addBrowserClient(client: SseClient): void {
   browserClients.add(client);
   client.write('event: connected\n');
   client.write('data: {"ok":true}\n\n');
+
+  while (pendingBrowserJobs.length > 0) {
+    const job = pendingBrowserJobs.shift();
+    if (!job) {
+      break;
+    }
+    client.write(`event: job\ndata: ${JSON.stringify(job)}\n\n`);
+  }
 }
 
 export function removeBrowserClient(client: SseClient): void {
@@ -57,6 +89,12 @@ export function removeBrowserClient(client: SseClient): void {
 
 export function broadcastBrowserJob(job: BrowserJobEvent): void {
   const payload = `event: job\ndata: ${JSON.stringify(job)}\n\n`;
+
+  if (browserClients.size === 0) {
+    pendingBrowserJobs.push(job);
+    return;
+  }
+
   for (const client of browserClients) {
     client.write(payload);
   }
@@ -140,4 +178,5 @@ export function startSessionHeartbeat(
 export function clearSseHub(): void {
   browserClients.clear();
   sessionClients.clear();
+  pendingBrowserJobs.length = 0;
 }
