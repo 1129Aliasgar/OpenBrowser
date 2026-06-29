@@ -1,9 +1,14 @@
 import pino from 'pino';
 
-export const logger = pino({
-  name: 'openbrowser',
-  level: process.env.LOG_LEVEL ?? 'info',
-});
+export const logger = pino(
+  {
+    name: 'openbrowser',
+    level: process.env.LOG_LEVEL ?? 'warn',
+  },
+  pino.destination(2),
+);
+
+export { renderMarkdownForTerminal, writeAnswerBlock } from './terminal.js';
 
 export type TrackerStep =
   | 'reading browser'

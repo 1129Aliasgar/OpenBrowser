@@ -8,19 +8,21 @@ import {
   formatContextJson,
   formatContextMarkdown,
   generateContext,
+  listContextChoices,
   loadContextFiles,
   parseAtRefs,
-  pickContextPaths,
+  readLineWithAtCompletion,
 } from './context/index.js';
 import { parseAIResponse } from './parser/index.js';
 import { executeOperations, planOperations } from './operations/index.js';
 import {
   buildAgentSystemPrompt,
   buildAskSystemPrompt,
+  buildAgentRetryMessage,
   buildFullMessage,
 } from './prompts/system.js';
 import { startServer } from './server/index.js';
-import { AgentStepTracker, formatError, type TrackerStep } from './shared/index.js';
+import { AgentStepTracker, formatError, writeAnswerBlock, type TrackerStep } from './shared/index.js';
 
 const program = new Command();
 const DEFAULT_PORT = Number(process.env.PORT ?? 5000);
@@ -125,37 +127,39 @@ async function readPromptWithContext(
   rl: readline.Interface,
   mode: 'ask' | 'agent',
 ): Promise<{ prompt: string; contextPaths: string[] }> {
-  const attachedPaths: string[] = [];
+  const choices = await listContextChoices(process.cwd());
 
-  output.write('\nType @ to attach files/folders. Enter your prompt when ready.\n');
+  output.write('\nType @ for file suggestions (Tab to complete). Enter prompt when ready.\n');
 
   while (true) {
-    const label = attachedPaths.length
-      ? `${mode}> [${attachedPaths.length} attached] `
-      : `${mode}> `;
-    const line = (await rl.question(label)).trim();
+    const label = `${mode}> `;
 
-    if (line === '@') {
-      rl.pause();
-      try {
-        const picked = await pickContextPaths(process.cwd());
-        if (picked.length > 0) {
-          attachedPaths.push(...picked);
-          output.write(`Attached: ${picked.join(', ')}\n`);
-        }
-      } finally {
-        rl.resume();
-      }
-      continue;
+    rl.pause();
+    let line: string;
+    try {
+      line = (await readLineWithAtCompletion(label, choices)).trim();
+    } finally {
+      rl.resume();
     }
 
     if (!line) {
       continue;
     }
 
-    const { cleanPrompt, paths: inlinePaths } = parseAtRefs(line);
-    const contextPaths = [...new Set([...attachedPaths, ...inlinePaths])];
+    const { cleanPrompt, paths: contextPaths } = parseAtRefs(line);
     return { prompt: cleanPrompt || line, contextPaths };
+  }
+}
+
+async function waitForBrowserResponse(
+  sessionId: string,
+  rl?: readline.Interface,
+): Promise<string> {
+  rl?.pause();
+  try {
+    return await waitForSessionResponse(sessionId, { port: DEFAULT_PORT });
+  } finally {
+    rl?.resume();
   }
 }
 
@@ -195,9 +199,9 @@ async function runAsk(prompt: string, options: RunOptions = {}): Promise<void> {
   });
 
   try {
-    const answer = await waitForSessionResponse(sessionId, { port: DEFAULT_PORT });
+    const answer = await waitForBrowserResponse(sessionId, options.rl);
     tracker.complete('ask response received');
-    output.write(`\n${answer || '(empty response)'}\n`);
+    writeAnswerBlock(answer || '(empty response)');
   } catch (error) {
     output.write(`\nAsk error: ${formatError(error)}\n`);
   }
@@ -222,59 +226,84 @@ async function runAgent(task: string, options: RunOptions = {}): Promise<void> {
 
   const conversationId = crypto.randomUUID();
   const systemPrompt = buildAgentSystemPrompt(conversationId);
-  const message = buildFullMessage('agent', systemPrompt, userTask, context);
+  let message = buildFullMessage('agent', systemPrompt, userTask, context);
 
-  tracker.step('reading browser', 'sending task to ChatGPT');
-  output.write('\nSending to browser AI (open ChatGPT with the extension loaded)...\n');
+  const maxAttempts = 3;
+  let raw = '';
 
-  const { sessionId } = await submitPrompt({
-    mode: 'agent',
-    prompt: userTask,
-    systemPrompt,
-    message,
-    conversationId,
-  });
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    tracker.step('reading browser', `sending task to ChatGPT (attempt ${attempt}/${maxAttempts})`);
+    output.write('\nSending to browser AI (open ChatGPT with the extension loaded)...\n');
 
-  let raw: string;
-  try {
-    raw = await waitForSessionResponse(sessionId, { port: DEFAULT_PORT });
-  } catch (error) {
-    output.write(`\nAgent error: ${formatError(error)}\n`);
-    return;
-  }
-
-  if (!raw.trim()) {
-    tracker.complete('no operations received');
-    return;
-  }
-
-  try {
-    tracker.step('loading', 'validating AI response');
-    const payload = parseAIResponse(raw);
-    if (payload.error) {
-      throw new Error(payload.error);
-    }
-
-    const operations = payload.operations ?? [];
-    const plans = await planOperations(operations, process.cwd());
-
-    for (const plan of plans) {
-      output.write(`\n${plan.diff}\n`);
-    }
-
-    const approved = await confirm('Apply these changes?', options.rl);
-    if (!approved) {
-      tracker.complete('rejected');
-      return;
-    }
-
-    await executeOperations(operations, process.cwd(), {
-      conversationId: payload.conversationId,
-      onStep: (step, detail) => tracker.step(step as TrackerStep, detail),
+    const { sessionId } = await submitPrompt({
+      mode: 'agent',
+      prompt: userTask,
+      systemPrompt,
+      message,
+      conversationId,
     });
-    tracker.complete(`applied ${operations.length} operation(s)`);
-  } catch (error) {
-    output.write(`\nAgent error: ${formatError(error)}\n`);
+
+    try {
+      raw = await waitForBrowserResponse(sessionId, options.rl);
+    } catch (error) {
+      const captureError = formatError(error);
+      if (attempt >= maxAttempts) {
+        output.write(`\nAgent error: ${captureError}\n`);
+        return;
+      }
+
+      output.write(`\nBrowser capture failed (${captureError}). Retrying...\n`);
+      message = buildAgentRetryMessage(message, captureError, conversationId);
+      continue;
+    }
+
+    if (!raw.trim()) {
+      if (attempt >= maxAttempts) {
+        tracker.complete('no operations received');
+        return;
+      }
+
+      output.write('\nEmpty browser response. Retrying...\n');
+      message = buildAgentRetryMessage(message, 'Empty response from browser AI', conversationId);
+      continue;
+    }
+
+    try {
+      tracker.step('loading', 'validating AI response');
+      const payload = parseAIResponse(raw, { conversationId });
+      if (payload.error) {
+        throw new Error(payload.error);
+      }
+
+      const operations = payload.operations ?? [];
+      const plans = await planOperations(operations, process.cwd());
+
+      for (const plan of plans) {
+        output.write(`\n${plan.diff}\n`);
+      }
+
+      const approved = await confirm('Apply these changes?', options.rl);
+      if (!approved) {
+        tracker.complete('rejected');
+        return;
+      }
+
+      await executeOperations(operations, process.cwd(), {
+        conversationId: payload.conversationId,
+        onStep: (step, detail) => tracker.step(step as TrackerStep, detail),
+      });
+      tracker.complete(`applied ${operations.length} operation(s)`);
+      return;
+    } catch (error) {
+      const validationError = formatError(error);
+      if (attempt >= maxAttempts) {
+        output.write(`\nAgent error: ${validationError}\n`);
+        return;
+      }
+
+      output.write(`\nInvalid agent JSON (${validationError}). Retrying (${attempt}/${maxAttempts - 1})...\n`);
+      message = buildAgentRetryMessage(message, validationError, conversationId);
+    }
   }
 }
 

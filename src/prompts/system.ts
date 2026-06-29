@@ -44,6 +44,21 @@ export function buildAgentSystemPrompt(conversationId: string): string {
   ].join('\n');
 }
 
+export function buildAgentRetryMessage(
+  originalMessage: string,
+  validationError: string,
+  conversationId: string,
+): string {
+  return [
+    originalMessage,
+    '',
+    '--- OpenBrowser Validation Error ---',
+    'Your previous response was invalid. Reply with ONLY valid JSON (no markdown fences, no extra text).',
+    `Validation error: ${validationError}`,
+    `Set "conversationId" to exactly: ${conversationId}`,
+  ].join('\n');
+}
+
 export function buildFullMessage(
   mode: SessionMode,
   systemPrompt: string,

@@ -15,15 +15,23 @@ export function parseAtRefs(text: string): { cleanPrompt: string; paths: string[
   return { cleanPrompt, paths };
 }
 
-export async function pickContextPaths(projectRoot: string): Promise<string[]> {
-  const choices = await listContextChoices(projectRoot);
+export async function pickContextPaths(
+  projectRoot: string,
+  initial = '',
+): Promise<string[]> {
+  const allChoices = await listContextChoices(projectRoot);
+  const needle = initial.trim().toLowerCase();
+  const choices = needle
+    ? allChoices.filter((choice) => choice.toLowerCase().includes(needle))
+    : allChoices;
+
   if (choices.length === 0) {
     return [];
   }
 
   const prompt = new Enquirer.AutoComplete({
     name: 'context',
-    message: 'Attach file or folder (@)',
+    message: initial ? `Attach (@${initial})` : 'Attach file or folder (@)',
     limit: 12,
     multiple: true,
     choices: choices.map((choice) => ({

@@ -109,10 +109,7 @@ async function processJob(job) {
   await injectPrompt(job.message);
   await clickSendWhenReady();
 
-  const text =
-    job.mode === 'agent'
-      ? await waitForAgentJson(beforeCount)
-      : await waitForPlainResponse(beforeCount);
+  const text = await waitForPlainResponse(beforeCount, job.mode);
 
   await postBrowserResponse({ sessionId: job.sessionId, text });
 }
@@ -243,50 +240,25 @@ function findSendButton() {
   );
 }
 
-async function waitForPlainResponse(beforeCount) {
-  const text = await waitForAssistantText(beforeCount);
+async function waitForPlainResponse(beforeCount, mode) {
+  const text = await waitForAssistantText(beforeCount, mode);
   if (!text) {
     throw new Error('No assistant response detected.');
   }
   return text;
 }
 
-async function waitForAgentJson(beforeCount) {
-  const deadline = Date.now() + RESPONSE_TIMEOUT_MS;
-  let lastCandidate = '';
-
-  while (Date.now() < deadline) {
-    const text = getLatestAssistantText(beforeCount);
-    if (text) {
-      const payload = extractJsonPayload(text);
-      if (payload) {
-        return payload;
-      }
-      lastCandidate = text;
-    }
-    await sleep(POLL_MS);
-  }
-
-  if (lastCandidate) {
-    const payload = extractJsonPayload(lastCandidate);
-    if (payload) {
-      return payload;
-    }
-  }
-
-  throw new Error('Timed out waiting for valid agent JSON response.');
-}
-
-async function waitForAssistantText(beforeCount) {
+async function waitForAssistantText(beforeCount, mode) {
   const deadline = Date.now() + RESPONSE_TIMEOUT_MS;
   let lastText = '';
   let stableSince = 0;
 
   while (Date.now() < deadline) {
-    const text = getLatestAssistantText(beforeCount);
+    const text = getLatestAssistantText(beforeCount, mode === 'agent');
     if (text) {
+      const stableMs = getStableMs(text, mode);
       if (text === lastText) {
-        if (Date.now() - stableSince >= STABLE_MS) {
+        if (Date.now() - stableSince >= stableMs) {
           return text;
         }
       } else {
@@ -300,13 +272,53 @@ async function waitForAssistantText(beforeCount) {
   return lastText || null;
 }
 
-function getLatestAssistantText(beforeCount) {
+function getStableMs(text, mode) {
+  if (mode !== 'agent') {
+    return STABLE_MS;
+  }
+
+  const trimmed = text.trim();
+  if (trimmed.startsWith('{') && trimmed.endsWith('}') && braceDepth(trimmed) === 0) {
+    return 800;
+  }
+
+  return STABLE_MS;
+}
+
+function braceDepth(text) {
+  let depth = 0;
+  for (const char of text) {
+    if (char === '{') {
+      depth += 1;
+    } else if (char === '}') {
+      depth -= 1;
+    }
+  }
+  return depth;
+}
+
+function getLatestAssistantText(beforeCount, preferCodeBlock = false) {
   const responseNodes = collectAssistantNodes();
   if (responseNodes.length <= beforeCount) {
     return null;
   }
 
   const latest = responseNodes[responseNodes.length - 1];
+  if (preferCodeBlock) {
+    const codeBlocks = [
+      ...latest.querySelectorAll('pre code'),
+      ...latest.querySelectorAll('code.language-json'),
+      ...latest.querySelectorAll('code'),
+    ];
+
+    for (const block of codeBlocks) {
+      const content = block.textContent?.trim();
+      if (content?.startsWith('{')) {
+        return content;
+      }
+    }
+  }
+
   return latest?.textContent?.trim() ?? null;
 }
 
@@ -340,26 +352,6 @@ function findPromptInput() {
     document.querySelector('textarea[placeholder*="Message"]') ??
     document.querySelector('textarea[data-id="root"]')
   );
-}
-
-function extractJsonPayload(text) {
-  const trimmed = text.trim();
-  const fenced = /```(?:json)?\s*([\s\S]*?)\s*```/i.exec(trimmed);
-  const candidate = fenced?.[1]?.trim() ?? trimmed;
-
-  if (!candidate.startsWith('{') || !candidate.endsWith('}')) {
-    return null;
-  }
-
-  try {
-    const parsed = JSON.parse(candidate);
-    if (!parsed.conversationId) {
-      return null;
-    }
-    return JSON.stringify(parsed);
-  } catch {
-    return null;
-  }
 }
 
 async function postBrowserResponse(body) {
