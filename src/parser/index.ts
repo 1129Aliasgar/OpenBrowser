@@ -14,6 +14,7 @@ import {
 } from './markdown-agent.js';
 import { FileOperation } from '../core/types/index.js';
 import { expandMkdirOperations } from '../operations/mkdir-normalize.js';
+import { sortOperationsByExecutionOrder } from '../operations/operation-order.js';
 
 export interface ParseAIResponseOptions {
   conversationId?: string;
@@ -63,14 +64,16 @@ export function parseAIResponse(
   }
 
   const fileBlocks = extractFileBlocks(rawText);
-  const mergedOps = expandMkdirOperations(
-    normalizeOperationTextFields(
-      mergeYamlFencesIntoOperations(
-        mergeMarkdownFencesIntoOperations(
-          mergeFileBlocksIntoOperations(operations, fileBlocks, rawText),
+  const mergedOps = sortOperationsByExecutionOrder(
+    expandMkdirOperations(
+      normalizeOperationTextFields(
+        mergeYamlFencesIntoOperations(
+          mergeMarkdownFencesIntoOperations(
+            mergeFileBlocksIntoOperations(operations, fileBlocks, rawText),
+            rawText,
+          ),
           rawText,
         ),
-        rawText,
       ),
     ),
   );

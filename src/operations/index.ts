@@ -7,6 +7,7 @@ import type { FileOperation } from '../core/index.js';
 import { normalizeMultilineText } from '../parser/markdown-agent.js';
 import { appendHistory } from '../memory/index.js';
 import { expandMkdirOperations, looksLikePowerShellCommand } from './mkdir-normalize.js';
+import { sortOperationsByExecutionOrder } from './operation-order.js';
 
 const execAsync = promisify(exec);
 
@@ -28,7 +29,9 @@ export async function planOperations(
 ): Promise<PlannedOperation[]> {
   const root = path.resolve(projectRoot);
   const plans: PlannedOperation[] = [];
-  const normalizedOperations = expandMkdirOperations(operations);
+  const normalizedOperations = sortOperationsByExecutionOrder(
+    expandMkdirOperations(operations),
+  );
 
   for (const operation of normalizedOperations) {
     if (operation.action === 'RUN_COMMAND') {

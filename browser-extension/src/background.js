@@ -30,6 +30,9 @@ const readyTabs = new Map();
 /** @type {Array<{ job: object, attempts: number, nextTry: number }>} */
 const pendingDispatches = [];
 
+/** @type {Set<string>} */
+const dispatchedSessionIds = new Set();
+
 chrome.runtime.onInstalled.addListener(() => {
   setupKeepalive();
   void connectBridgeStream();
@@ -236,10 +239,17 @@ async function dispatchJob(job) {
     return;
   }
 
-  const delivered = await tryDispatchJob(job);
-  if (!delivered) {
-    queuePendingDispatch(job);
+  if (dispatchedSessionIds.has(job.sessionId)) {
+    return;
   }
+
+  const delivered = await tryDispatchJob(job);
+  if (delivered) {
+    dispatchedSessionIds.add(job.sessionId);
+    return;
+  }
+
+  queuePendingDispatch(job);
 }
 
 function queuePendingDispatch(job) {
@@ -266,6 +276,7 @@ async function flushPendingDispatches() {
 
     const delivered = await tryDispatchJob(entry.job);
     if (delivered) {
+      dispatchedSessionIds.add(entry.job.sessionId);
       pendingDispatches.splice(index, 1);
       continue;
     }

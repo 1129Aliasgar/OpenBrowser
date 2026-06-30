@@ -49,14 +49,77 @@ export function isYamlPath(filePath: string): boolean {
   return /\.(ya?ml)$/i.test(normalizePath(filePath));
 }
 
+export function isPnpmWorkspacePath(filePath: string): boolean {
+  return /pnpm-workspace\.ya?ml$/i.test(normalizePath(filePath));
+}
+
+/** Fix pnpm-workspace.yaml when list items are missing leading dashes. */
+export function normalizePnpmWorkspaceYaml(content: string): string {
+  const text = normalizeMultilineText(content).trim();
+  if (!/^packages:/im.test(text)) {
+    return text;
+  }
+
+  const lines = text.split('\n');
+  const result: string[] = [];
+  let inPackagesList = false;
+
+  for (const line of lines) {
+    const trimmed = line.trim();
+
+    if (/^packages:\s*$/i.test(trimmed)) {
+      inPackagesList = true;
+      result.push('packages:');
+      continue;
+    }
+
+    if (!inPackagesList) {
+      result.push(line);
+      continue;
+    }
+
+    if (!trimmed) {
+      continue;
+    }
+
+    if (/^-\s+/.test(trimmed)) {
+      const value = trimmed.replace(/^-\s+/, '').replace(/^['"]|['"]$/g, '');
+      result.push(`  - "${value}"`);
+      continue;
+    }
+
+    const globMatch = trimmed.match(/^["']?([^"']+)["']?\s*$/);
+    if (globMatch?.[1]) {
+      result.push(`  - "${globMatch[1]}"`);
+      continue;
+    }
+
+    inPackagesList = false;
+    result.push(line);
+  }
+
+  return `${result.join('\n').trim()}\n`;
+}
+
 /** Restore line breaks when YAML was captured as a single collapsed line. */
-export function normalizeYamlContent(content: string): string {
+export function normalizeYamlContent(content: string, filePath?: string): string {
   let text = normalizeMultilineText(content)
     .replace(/<br\s*\/?>/gi, '\n')
     .trim();
 
+  if (filePath && isPnpmWorkspacePath(filePath)) {
+    return normalizePnpmWorkspaceYaml(text);
+  }
+
+  if (/^packages:/im.test(text) && /["'][^"']*\*[^"']*["']/m.test(text)) {
+    return normalizePnpmWorkspaceYaml(text);
+  }
+
   const newlineCount = (text.match(/\n/g) ?? []).length;
   if (newlineCount >= 3) {
+    if (/^packages:/im.test(text) && !/^\s+-\s+/m.test(text)) {
+      return normalizePnpmWorkspaceYaml(text);
+    }
     return text;
   }
 
@@ -283,7 +346,7 @@ export function extractObFileBlocks(markdown: string): MarkdownFileBlock[] {
     const filePath = normalizePath(match[1] ?? '');
     let content = normalizeMultilineText((match[2] ?? '').replace(/\n$/, '').trim());
     if (isYamlPath(filePath)) {
-      content = normalizeYamlContent(content);
+      content = normalizeYamlContent(content, filePath);
     }
     if (filePath && content && !isOperationsJson(content)) {
       blocks.set(pathKey(filePath), { path: filePath, content });
@@ -754,7 +817,17 @@ export function normalizeOperationTextFields<
     content:
       operation.content !== undefined
         ? isYamlPath((operation as { path?: string }).path ?? '')
-          ? normalizeYamlContent(normalizeMultilineText(operation.content))
+          ? isPnpmWorkspacePath((operation as { path?: string }).path ?? '')
+            ? normalizePnpmWorkspaceYaml(
+                normalizeYamlContent(
+                  normalizeMultilineText(operation.content),
+                  (operation as { path?: string }).path,
+                ),
+              )
+            : normalizeYamlContent(
+                normalizeMultilineText(operation.content),
+                (operation as { path?: string }).path,
+              )
           : normalizeMultilineText(operation.content)
         : undefined,
     search: operation.search !== undefined ? normalizeMultilineText(operation.search) : undefined,

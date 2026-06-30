@@ -1,6 +1,7 @@
 import type { FileOperation } from '../core/types/index.js';
 
 const MKDIR_SEGMENT_RE = /^(?:mkdir|md)\s+/i;
+const CMD_IF_NOT_EXIST_MKDIR_RE = /^if\s+not\s+exist\s+(\S+)\s+(?:mkdir|md)\s+(\S+)/i;
 const POWERSHELL_MKDIR_SEGMENT_RE = /^New-Item\b/i;
 const MKDIR_FLAGS = new Set(['-p', '-parents', '--parents', '-force', '-f']);
 
@@ -107,6 +108,12 @@ function extractMkdirPaths(segment: string): string[] | null {
   const trimmed = segment.trim();
   if (!trimmed) {
     return null;
+  }
+
+  const ifNotExistMatch = CMD_IF_NOT_EXIST_MKDIR_RE.exec(trimmed);
+  if (ifNotExistMatch) {
+    const path = normalizeDirPath(ifNotExistMatch[2] ?? ifNotExistMatch[1] ?? '');
+    return path ? [path] : null;
   }
 
   if (POWERSHELL_MKDIR_SEGMENT_RE.test(trimmed)) {

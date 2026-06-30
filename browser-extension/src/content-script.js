@@ -31,15 +31,14 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     return true;
   }
 
-  if (message?.type !== 'OPENBROWSER_RUN_JOB') {
-    return false;
+  if (message?.type === 'OPENBROWSER_RUN_JOB') {
+    void handleIncomingJob(message.job)
+      .then(() => sendResponse?.({ ok: true }))
+      .catch((error) => sendResponse?.({ ok: false, error: String(error) }));
+    return true;
   }
 
-  handleJob(message.job)
-    .then(() => sendResponse({ ok: true }))
-    .catch((error) => sendResponse({ ok: false, error: String(error) }));
-
-  return true;
+  return false;
 });
 
 async function handleIncomingJob(job) {
@@ -243,6 +242,7 @@ async function injectLexical(element, text) {
     element.innerHTML = `<p dir="auto">${escapeHtml(text).replace(/\n/g, '<br>')}</p>`;
   }
 
+  dedupeInjectedComposer(element, text);
   dispatchInput(element);
 }
 
@@ -255,6 +255,7 @@ async function injectProseMirror(element, text) {
   await sleep(100);
 
   if (hasInjectedContent(element, text)) {
+    dedupeInjectedComposer(element, text);
     dispatchInput(element);
     return;
   }
@@ -267,7 +268,33 @@ async function injectProseMirror(element, text) {
     element.innerHTML = `<p>${escapeHtml(text).replace(/\n/g, '<br>')}</p>`;
   }
 
+  dedupeInjectedComposer(element, text);
   dispatchInput(element);
+}
+
+function dedupeInjectedComposer(element, text) {
+  const expected = text.trim();
+  if (!expected) {
+    return;
+  }
+
+  const actual = (
+    element instanceof HTMLTextAreaElement || element instanceof HTMLInputElement
+      ? element.value
+      : (element.textContent ?? '')
+  ).trim();
+
+  if (!actual || actual.length <= expected.length * 1.05) {
+    return;
+  }
+
+  if (actual.includes(expected) && actual.length > expected.length * 1.05) {
+    if (element instanceof HTMLTextAreaElement || element instanceof HTMLInputElement) {
+      element.value = expected;
+    } else {
+      element.textContent = expected;
+    }
+  }
 }
 
 function clearComposer(element) {
@@ -335,10 +362,8 @@ async function clickSendWhenReady() {
   for (let attempt = 0; attempt < SEND_MAX_RETRIES; attempt += 1) {
     const button = findSendButton();
     if (button && isSendButtonEnabled(button)) {
+      // Use a single submit action — button.click() plus dispatchEvent caused double sends.
       button.click();
-      button.dispatchEvent(
-        new MouseEvent('click', { bubbles: true, cancelable: true, view: window }),
-      );
       return;
     }
 
