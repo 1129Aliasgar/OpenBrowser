@@ -35,13 +35,117 @@ export function detectCopyPasteBlocks(
 
   return [
     'You used markdown code fences (```). For code files use OB_FILE blocks.',
-    `For .md files use ONE \`\`\`markdown ... \`\`\` block. For .js/.json use ${OB_FILE_BEGIN} ... ${OB_FILE_END}.`,
+    `For .md files use ONE \`\`\`markdown ... \`\`\` block. For .js/.json/.yml use ${OB_FILE_BEGIN} ... ${OB_FILE_END}.`,
+    'For RUN_COMMAND put commands in JSON only — not ```bash blocks.',
     'Do NOT use file attachment UI, canvas, or copy-code widgets.',
   ].join(' ');
 }
 
 export function isMarkdownPath(filePath: string): boolean {
   return /\.(md|markdown)$/i.test(normalizePath(filePath));
+}
+
+export function isYamlPath(filePath: string): boolean {
+  return /\.(ya?ml)$/i.test(normalizePath(filePath));
+}
+
+/** Restore line breaks when YAML was captured as a single collapsed line. */
+export function normalizeYamlContent(content: string): string {
+  let text = normalizeMultilineText(content)
+    .replace(/<br\s*\/?>/gi, '\n')
+    .trim();
+
+  const newlineCount = (text.match(/\n/g) ?? []).length;
+  if (newlineCount >= 3) {
+    return text;
+  }
+
+  if (!/\w\s*:/.test(text)) {
+    return text;
+  }
+
+  const rawParts = text.split(/\s+(?=[A-Za-z_][\w-]*:(?:\s|$|"|'|-))/);
+  if (rawParts.length <= 1) {
+    return text;
+  }
+
+  const lines: string[] = [];
+  let section: 'root' | 'services' | 'service' = 'root';
+
+  for (let part of rawParts) {
+    part = part.trim();
+    if (!part) {
+      continue;
+    }
+
+    const listInline = /^([A-Za-z_][\w-]*):\s+(-\s.+)$/i.exec(part);
+    if (listInline) {
+      const indent = section === 'service' ? 4 : section === 'services' ? 2 : 0;
+      lines.push(`${' '.repeat(indent)}${listInline[1]}:`);
+      lines.push(`${' '.repeat(indent + 2)}${listInline[2]}`);
+      continue;
+    }
+
+    if (/^version:/i.test(part)) {
+      lines.push(part);
+      section = 'root';
+    } else if (/^services:/i.test(part)) {
+      lines.push(part);
+      section = 'services';
+    } else if (section === 'services' && /^[a-z][\w_-]*:/i.test(part)) {
+      lines.push(`  ${part}`);
+      section = 'service';
+    } else if (section === 'service') {
+      lines.push(`    ${part}`);
+    } else {
+      lines.push(part);
+    }
+  }
+
+  return lines.join('\n');
+}
+
+export function extractYamlFenceBlocks(markdown: string): MarkdownFileBlock[] {
+  const blocks: MarkdownFileBlock[] = [];
+
+  for (const match of markdown.matchAll(/```(?:yaml|yml)\s*\n([\s\S]*?)```/gi)) {
+    const content = normalizeYamlContent((match[1] ?? '').trim());
+    if (content && !isOperationsJson(content)) {
+      blocks.push({ path: '', content });
+    }
+  }
+
+  for (const match of markdown.matchAll(/```file:([^\n`]+\.ya?ml)\s*\n([\s\S]*?)```/gi)) {
+    const path = normalizePath(match[1] ?? '');
+    const content = normalizeYamlContent((match[2] ?? '').trim());
+    if (path && content && !isOperationsJson(content)) {
+      blocks.push({ path, content });
+    }
+  }
+
+  return blocks;
+}
+
+/** Reject when the model put runnable commands in bash fences instead of JSON RUN_COMMAND. */
+export function detectCommandInMarkdownBlocks(
+  raw: string,
+  operations: { action: string; command?: string }[],
+): string | null {
+  if (!/```(?:bash|sh|shell|cmd|powershell|terminal)\s*\n/i.test(raw)) {
+    return null;
+  }
+
+  const hasRunCommand = operations.some(
+    (operation) => operation.action === 'RUN_COMMAND' && operation.command?.trim(),
+  );
+  if (hasRunCommand) {
+    return null;
+  }
+
+  return [
+    'Put shell/docker commands in JSON only: { "action": "RUN_COMMAND", "command": "..." }.',
+    'Do NOT use ```bash / ```sh / ```shell markdown copy-paste blocks for runnable commands.',
+  ].join(' ');
 }
 
 export function hasMarkdownFence(raw: string): boolean {
@@ -110,6 +214,17 @@ export function operationsNeedMarkdownContent(
   );
 }
 
+export function operationsNeedYamlContent(
+  operations: { action: string; path?: string; content?: string }[],
+): boolean {
+  return operations.some(
+    (operation) =>
+      (operation.action === 'CREATE_FILE' || operation.action === 'EDIT_FILE') &&
+      isYamlPath(operation.path ?? '') &&
+      !operation.content?.trim(),
+  );
+}
+
 function normalizePath(filePath: string): string {
   return filePath.replace(/\\/g, '/').replace(/^\.\//, '').trim();
 }
@@ -166,7 +281,10 @@ export function extractObFileBlocks(markdown: string): MarkdownFileBlock[] {
 
   for (const match of markdown.matchAll(OB_FILE_BLOCK_RE)) {
     const filePath = normalizePath(match[1] ?? '');
-    const content = normalizeMultilineText((match[2] ?? '').replace(/\n$/, '').trim());
+    let content = normalizeMultilineText((match[2] ?? '').replace(/\n$/, '').trim());
+    if (isYamlPath(filePath)) {
+      content = normalizeYamlContent(content);
+    }
     if (filePath && content && !isOperationsJson(content)) {
       blocks.set(pathKey(filePath), { path: filePath, content });
     }
@@ -197,6 +315,12 @@ export function extractFileBlocks(markdown: string): MarkdownFileBlock[] {
     }
   }
 
+  for (const block of extractYamlFenceBlocks(markdown)) {
+    if (block.path) {
+      blocks.set(pathKey(block.path), block);
+    }
+  }
+
   for (const segment of extractOrderedContentSegments(markdown)) {
     if (segment.path) {
       const path = normalizePath(segment.path);
@@ -220,7 +344,10 @@ export function extractFileBlocks(markdown: string): MarkdownFileBlock[] {
   for (const pattern of patterns) {
     for (const match of markdown.matchAll(pattern)) {
       const filePath = normalizePath(match[1] ?? '');
-      const content = normalizeMultilineText((match[2] ?? '').replace(/\n$/, ''));
+      let content = normalizeMultilineText((match[2] ?? '').replace(/\n$/, ''));
+      if (isYamlPath(filePath)) {
+        content = normalizeYamlContent(content);
+      }
       if (filePath && content.trim() && !isOperationsJson(content)) {
         blocks.set(pathKey(filePath), { path: filePath, content });
       }
@@ -521,6 +648,48 @@ export function mergeMarkdownFencesIntoOperations<
   return result;
 }
 
+export function mergeYamlFencesIntoOperations<
+  T extends { action: string; path?: string; content?: string },
+>(operations: T[], rawMarkdown: string): T[] {
+  const unlabeled = extractYamlFenceBlocks(rawMarkdown)
+    .filter((block) => !block.path)
+    .map((block) => block.content);
+
+  if (unlabeled.length === 0) {
+    return operations;
+  }
+
+  const pendingYaml = operations
+    .map((operation, index) => ({ operation, index }))
+    .filter(
+      ({ operation }) =>
+        (operation.action === 'CREATE_FILE' || operation.action === 'EDIT_FILE') &&
+        isYamlPath(operation.path ?? '') &&
+        !operation.content?.trim(),
+    );
+
+  if (pendingYaml.length === 0) {
+    return operations;
+  }
+
+  const result = [...operations];
+  const sortedFences = [...unlabeled].sort((a, b) => b.length - a.length);
+
+  if (sortedFences.length === 1) {
+    for (const { operation, index } of pendingYaml) {
+      result[index] = { ...operation, content: sortedFences[0]! };
+    }
+    return result;
+  }
+
+  for (let i = 0; i < pendingYaml.length && i < sortedFences.length; i += 1) {
+    const { operation, index } = pendingYaml[i]!;
+    result[index] = { ...operation, content: sortedFences[i]! };
+  }
+
+  return result;
+}
+
 function mergePathMatchedSegments<T extends { action: string; path?: string; content?: string }>(
   operations: T[],
   segments: ContentSegment[],
@@ -582,7 +751,12 @@ export function normalizeOperationTextFields<
 >(operations: T[]): T[] {
   return operations.map((operation) => ({
     ...operation,
-    content: operation.content !== undefined ? normalizeMultilineText(operation.content) : undefined,
+    content:
+      operation.content !== undefined
+        ? isYamlPath((operation as { path?: string }).path ?? '')
+          ? normalizeYamlContent(normalizeMultilineText(operation.content))
+          : normalizeMultilineText(operation.content)
+        : undefined,
     search: operation.search !== undefined ? normalizeMultilineText(operation.search) : undefined,
     replace: operation.replace !== undefined ? normalizeMultilineText(operation.replace) : undefined,
   }));
@@ -605,7 +779,9 @@ export function validateMergedFileOperations(
       if (!operation.content?.trim()) {
         const mdHint = isMarkdownPath(operation.path ?? '')
           ? 'Add ONE ```markdown ... ``` fenced block with full raw markdown source after the JSON.'
-          : `Add an OpenBrowser file block: ${OB_FILE_BEGIN} ${operation.path}--- ... ${OB_FILE_END} (path must match exactly).`;
+          : isYamlPath(operation.path ?? '')
+            ? `Add an OpenBrowser YAML block: ${OB_FILE_BEGIN} ${operation.path}--- with real line breaks ... ${OB_FILE_END}.`
+            : `Add an OpenBrowser file block: ${OB_FILE_BEGIN} ${operation.path}--- ... ${OB_FILE_END} (path must match exactly).`;
         throw new Error(`Missing content for ${operation.path}. ${mdHint}`);
       }
     }

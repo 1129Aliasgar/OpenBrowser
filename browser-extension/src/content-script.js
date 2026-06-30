@@ -148,6 +148,7 @@ async function processJob(job) {
   const beforeCount = countAssistantMessages();
 
   await injectPrompt(job.message);
+  await sleep(150);
   await clickSendWhenReady();
 
   const text = await waitForPlainResponse(beforeCount, job.mode, job.sessionId, {
@@ -191,19 +192,37 @@ async function injectPrompt(message) {
 
 async function injectTextarea(element, text) {
   element.focus();
-  element.select?.();
+  clearComposer(element);
+  await sleep(50);
 
   const prototype = window.HTMLTextAreaElement.prototype;
   const descriptor = Object.getOwnPropertyDescriptor(prototype, 'value');
   descriptor?.set?.call(element, text);
-
   element.value = text;
-  element.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: text }));
+  dispatchInput(element);
   element.dispatchEvent(new Event('change', { bubbles: true }));
 
-  if (!hasInjectedContent(element, text)) {
-    dispatchPaste(element, text);
-    await sleep(100);
+  if (hasInjectedContent(element, text)) {
+    dedupeInjectedTextarea(element, text);
+    return;
+  }
+
+  document.execCommand('insertText', false, text);
+  await sleep(50);
+  dispatchInput(element);
+  dedupeInjectedTextarea(element, text);
+}
+
+function dedupeInjectedTextarea(element, text) {
+  const expected = text.trim();
+  const actual = (element.value ?? '').trim();
+  if (!expected || !actual) {
+    return;
+  }
+
+  if (actual.length > expected.length * 1.05 && actual.includes(expected)) {
+    element.value = expected;
+    dispatchInput(element);
   }
 }
 
@@ -258,7 +277,11 @@ function clearComposer(element) {
 }
 
 function hasInjectedContent(element, text) {
-  const actual = (element.textContent ?? '').trim();
+  const actual = (
+    element instanceof HTMLTextAreaElement || element instanceof HTMLInputElement
+      ? element.value
+      : (element.textContent ?? '')
+  ).trim();
   const expected = text.trim();
   if (!actual || !expected) {
     return false;
@@ -311,21 +334,101 @@ function setNativeValue(element, value) {
 async function clickSendWhenReady() {
   for (let attempt = 0; attempt < SEND_MAX_RETRIES; attempt += 1) {
     const button = findSendButton();
-    if (button && !button.disabled) {
+    if (button && isSendButtonEnabled(button)) {
       button.click();
+      button.dispatchEvent(
+        new MouseEvent('click', { bubbles: true, cancelable: true, view: window }),
+      );
       return;
     }
+
+    const input = findPromptInput();
+    if (input && hasComposerContent(input) && attempt >= 2) {
+      await submitViaEnter(input);
+      return;
+    }
+
     await sleep(SEND_RETRY_MS);
   }
 
   throw new Error('Send button stayed disabled. The page did not accept the injected prompt.');
 }
 
+function isSendButtonEnabled(button) {
+  if (!button) {
+    return false;
+  }
+
+  if (button.disabled === true) {
+    return false;
+  }
+
+  if (button.getAttribute('aria-disabled') === 'true') {
+    return false;
+  }
+
+  if (button.classList?.contains('ds-button--disabled')) {
+    return false;
+  }
+
+  const style = window.getComputedStyle(button);
+  if (style.pointerEvents === 'none' || style.visibility === 'hidden' || style.display === 'none') {
+    return false;
+  }
+
+  return true;
+}
+
+function hasComposerContent(input) {
+  if (input instanceof HTMLTextAreaElement) {
+    return (input.value ?? '').trim().length > 0;
+  }
+
+  return (input.textContent ?? input.innerText ?? '').trim().length > 0;
+}
+
+async function submitViaEnter(input) {
+  input.focus();
+  await sleep(50);
+
+  for (const type of ['keydown', 'keypress', 'keyup']) {
+    input.dispatchEvent(
+      new KeyboardEvent(type, {
+        key: 'Enter',
+        code: 'Enter',
+        keyCode: 13,
+        which: 13,
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+  }
+}
+
 function findSendButton() {
   if (!provider) {
     return null;
   }
-  return queryFirst(provider.selectors.send);
+
+  const seen = new Set();
+  const candidates = [];
+
+  for (const selector of provider.selectors.send) {
+    for (const node of document.querySelectorAll(selector)) {
+      if (!seen.has(node)) {
+        seen.add(node);
+        candidates.push(node);
+      }
+    }
+  }
+
+  for (const button of candidates) {
+    if (isSendButtonEnabled(button)) {
+      return button;
+    }
+  }
+
+  return candidates[0] ?? null;
 }
 
 async function waitForPlainResponse(beforeCount, mode, sessionId, options = {}) {
@@ -625,11 +728,78 @@ function mergeAssistantTexts(nodes) {
 const OB_FILE_BLOCK_CAPTURE_RE =
   /---OB_FILE_BEGIN:\s*([^\n]+?)---\s*([\s\S]*?)---OB_FILE_END---/gi;
 
+function extractPreCodeText(element) {
+  const html = element.innerHTML ?? '';
+  if (/<br\s*\/?>/i.test(html)) {
+    return html
+      .replace(/<br\s*\/?>/gi, '\n')
+      .replace(/<\/div>/gi, '\n')
+      .replace(/<[^>]+>/g, '')
+      .replace(/\n$/, '');
+  }
+
+  return (element.textContent ?? '').replace(/\n$/, '');
+}
+
+function normalizeYamlCaptureText(content) {
+  let text = content.replace(/\r\n/g, '\n').replace(/\\n/g, '\n').trim();
+  if ((text.match(/\n/g) ?? []).length >= 3) {
+    return text;
+  }
+
+  if (!/\w\s*:/.test(text)) {
+    return text;
+  }
+
+  const rawParts = text.split(/\s+(?=[A-Za-z_][\w-]*:(?:\s|$|"|'|-))/);
+  if (rawParts.length <= 1) {
+    return text;
+  }
+
+  const lines = [];
+  let section = 'root';
+
+  for (let part of rawParts) {
+    part = part.trim();
+    if (!part) {
+      continue;
+    }
+
+    const listInline = /^([A-Za-z_][\w-]*):\s+(-\s.+)$/i.exec(part);
+    if (listInline) {
+      const indent = section === 'service' ? 4 : section === 'services' ? 2 : 0;
+      lines.push(`${' '.repeat(indent)}${listInline[1]}:`);
+      lines.push(`${' '.repeat(indent + 2)}${listInline[2]}`);
+      continue;
+    }
+
+    if (/^version:/i.test(part)) {
+      lines.push(part);
+      section = 'root';
+    } else if (/^services:/i.test(part)) {
+      lines.push(part);
+      section = 'services';
+    } else if (section === 'services' && /^[a-z][\w_-]*:/i.test(part)) {
+      lines.push(`  ${part}`);
+      section = 'service';
+    } else if (section === 'service') {
+      lines.push(`    ${part}`);
+    } else {
+      lines.push(part);
+    }
+  }
+
+  return lines.join('\n');
+}
+
 function normalizeObFileCaptureText(text) {
   const blocks = [];
   for (const match of text.matchAll(OB_FILE_BLOCK_CAPTURE_RE)) {
     const path = normalizeCapturePath((match[1] ?? '').trim());
-    const content = (match[2] ?? '').trim();
+    let content = (match[2] ?? '').trim();
+    if (path && /\.ya?ml$/i.test(path)) {
+      content = normalizeYamlCaptureText(content);
+    }
     if (path && content) {
       blocks.push({ path, content });
     }
@@ -668,7 +838,7 @@ function buildAgentCaptureText(node) {
 
   for (const pre of pres) {
     const code = pre.querySelector('code') ?? pre;
-    const content = (code.textContent ?? '').replace(/\n$/, '');
+    const content = extractPreCodeText(code);
     if (!content.trim()) {
       continue;
     }
@@ -694,7 +864,9 @@ function buildAgentCaptureText(node) {
     }
 
     if (path) {
-      parts.push(`---OB_FILE_BEGIN: ${path}---\n${content.trim()}\n---OB_FILE_END---`);
+      const fileContent =
+        /\.ya?ml$/i.test(path) ? normalizeYamlCaptureText(content.trim()) : content.trim();
+      parts.push(`---OB_FILE_BEGIN: ${path}---\n${fileContent}\n---OB_FILE_END---`);
     } else {
       parts.push(`\`\`\`\n${content.trim()}\n\`\`\``);
     }

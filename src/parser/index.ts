@@ -2,9 +2,11 @@ import { parse as parseJsonc } from 'jsonc-parser';
 import { validateAIResponse, formatValidationError, type AIResponsePayload, type Operation } from '../protocol/index.js';
 import {
   detectCopyPasteBlocks,
+  detectCommandInMarkdownBlocks,
   extractFileBlocks,
   mergeFileBlocksIntoOperations,
   mergeMarkdownFencesIntoOperations,
+  mergeYamlFencesIntoOperations,
   normalizeObFileCaptureText,
   normalizeOperationTextFields,
   operationsNeedMarkdownContent,
@@ -54,10 +56,18 @@ export function parseAIResponse(
     throw new Error(copyPasteError);
   }
 
+  const commandBlockError = detectCommandInMarkdownBlocks(rawText, operations);
+  if (commandBlockError) {
+    throw new Error(commandBlockError);
+  }
+
   const fileBlocks = extractFileBlocks(rawText);
   const mergedOps = normalizeOperationTextFields(
-    mergeMarkdownFencesIntoOperations(
-      mergeFileBlocksIntoOperations(operations, fileBlocks, rawText),
+    mergeYamlFencesIntoOperations(
+      mergeMarkdownFencesIntoOperations(
+        mergeFileBlocksIntoOperations(operations, fileBlocks, rawText),
+        rawText,
+      ),
       rawText,
     ),
   );

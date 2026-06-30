@@ -163,8 +163,10 @@ export function formatAgentContextJson(
     editingRules: [
       'Context files below include line numbers (format: "   1| code").',
       'For EDIT_FILE on an existing file: prefer startLine, endLine, and replace for partial edits.',
-      'For code files (.js, .json, etc.): use ---OB_FILE_BEGIN: path--- ... ---OB_FILE_END--- blocks.',
+      'For code files (.js, .json, .yml, etc.): use ---OB_FILE_BEGIN: path--- ... ---OB_FILE_END--- blocks.',
       'For README.md and .md files: use ONE ```markdown ... ``` fenced block (ask mode = draft only, agent mode = create file).',
+      'For YAML (.yml/.yaml): use OB_FILE blocks with real line breaks — not ```yaml fences.',
+      'For RUN_COMMAND: put commands only in JSON { "action": "RUN_COMMAND", "command": "..." } — never only in ```bash blocks.',
       'Do not use EDIT_FILE on package.json after npm init — use CREATE_FILE with full package.json content instead.',
     ],
     contextFiles: files.map((file) => ({

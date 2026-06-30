@@ -132,22 +132,35 @@ const OPENBROWSER_PROVIDERS = {
   deepseek: {
     name: 'DeepSeek',
     hosts: ['chat.deepseek.com'],
+    inject: 'textarea',
     selectors: {
       input: [
+        'textarea#chat-input',
+        'textarea[placeholder*="Message DeepSeek"]',
+        'textarea[placeholder*="DeepSeek"]',
         'textarea',
         'div[contenteditable="true"]',
         '.ProseMirror[contenteditable="true"]',
       ],
       send: [
+        'div.ds-button--primary[role="button"]',
+        'div.ds-button.ds-button--primary[role="button"]',
+        'input[type="file"] + div[role="button"]',
+        'div.ds-chat-input__button[role="button"]',
+        'button[aria-label="Send message"]',
         'button[type="submit"]',
         'button[aria-label="Send"]',
       ],
       assistant: [
         '.ds-markdown',
         '.markdown',
+        '[data-message-author-role="assistant"]',
         '[class*="assistant"]',
       ],
-      stop: ['button[aria-label="Stop"]'],
+      stop: [
+        'button[aria-label="Stop"]',
+        'div.ds-button[role="button"][aria-label*="Stop"]',
+      ],
       markdown: ['.ds-markdown', '.markdown'],
     },
   },

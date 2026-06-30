@@ -3,6 +3,27 @@ import type { SessionMode } from '../server/session-store.js';
 const OB_FILE_BEGIN = '---OB_FILE_BEGIN:';
 const OB_FILE_END = '---OB_FILE_END---';
 
+const RUN_COMMAND_EXAMPLE = `{
+  "operations": [
+    { "action": "RUN_COMMAND", "command": "docker compose up -d" }
+  ],
+  "conversationId": "<uuid-v4>"
+}`;
+
+const DOCKER_COMPOSE_YAML_EXAMPLE = `${OB_FILE_BEGIN} docker-compose.yml---
+version: "3.8"
+services:
+  mongodb:
+    image: mongo:latest
+    container_name: mongodb_server
+    restart: always
+    ports:
+      - "27017:27017"
+    volumes:
+      - C:/data/db:/data/db
+    command: mongod --bind_ip_all
+${OB_FILE_END}`;
+
 const HYBRID_EXPRESS_EXAMPLE = `{
   "operations": [
     { "action": "RUN_COMMAND", "command": "npm init -y && npm install express" },
@@ -198,6 +219,18 @@ export function buildAgentSystemPrompt(conversationId: string): string {
     '- Escape quotes in JSON strings (use \\" inside replace).',
     '- Do NOT use EDIT_FILE on package.json right after npm init — use CREATE_FILE with full package.json instead.',
     '',
+    '## RUN_COMMAND rules (commands in JSON only)',
+    '- ALL terminal, shell, and docker commands MUST appear ONLY in JSON:',
+    '  { "action": "RUN_COMMAND", "command": "your command here" }',
+    '- Never put runnable commands only in markdown/bash/shell copy-paste blocks (```bash, ```sh, ```shell, etc.).',
+    '- For command-only requests (e.g. "how do I run this file?"), a JSON-only response is sufficient — no OB_FILE blocks needed.',
+    '- Put multiple steps in one command with && or ; — do not split commands across separate markdown fences.',
+    '',
+    '## YAML files (.yml, .yaml, docker-compose.yml)',
+    `- Use ${OB_FILE_BEGIN} path--- blocks with real line breaks and indentation (same as .js/.json).`,
+    '- Preserve YAML structure: version, services, nested keys each on their own lines.',
+    '- Do NOT use ```yaml markdown fences — use OB_FILE blocks for .yml/.yaml files.',
+    '',
     '## Other rules',
     '- RUN_COMMAND runs in project root; use "cd folder && cmd" when needed.',
     '- Paths must be relative. No ../ traversal. No "..." placeholders.',
@@ -208,6 +241,14 @@ export function buildAgentSystemPrompt(conversationId: string): string {
     '',
     '## Example (edit existing file by line number)',
     EDIT_EXISTING_EXAMPLE,
+    '',
+    '## Example (RUN_COMMAND only — JSON, no bash block)',
+    RUN_COMMAND_EXAMPLE,
+    '',
+    '## Example (YAML file — OB_FILE with line breaks)',
+    `{ "operations": [{ "action": "CREATE_FILE", "path": "docker-compose.yml" }], "conversationId": "${conversationId}" }`,
+    '',
+    DOCKER_COMPOSE_YAML_EXAMPLE,
     '',
     '## Example (README.md — use markdown fence, not OB_FILE)',
     README_MARKDOWN_EXAMPLE,
@@ -266,13 +307,22 @@ function buildRetryFormatInstructions(conversationId: string): string {
     `- File missing → CREATE_FILE or EDIT_FILE with full ${OB_FILE_BEGIN} content (file will be created)`,
     `- File exists → use startLine/endLine/replace OR search/replace OR full ${OB_FILE_BEGIN} rewrite`,
     '',
+    'RUN_COMMAND:',
+    '- Commands go ONLY in JSON: { "action": "RUN_COMMAND", "command": "..." }',
+    '- Never use ```bash / ```sh / ```shell blocks for runnable commands',
+    '- Command-only replies need JSON only (no file blocks)',
+    '',
+    'YAML (.yml / .yaml):',
+    `- Use ${OB_FILE_BEGIN} path--- with real line breaks — NOT \`\`\`yaml fences`,
+    '',
     'Markdown (.md) files:',
     '- Use ONE ```markdown fenced block with raw # heading source — NOT OB_FILE markers.',
     '- Do NOT render README as chat preview.',
     '',
     'Do NOT use:',
     '- OB_FILE markers for .md files (use ```markdown instead)',
-    '- Markdown ``` fences for non-.md code files (use OB_FILE for .js, .json, etc.)',
+    '- Markdown ``` fences for non-.md code files (use OB_FILE for .js, .json, .yml, etc.)',
+    '- ```bash / ```sh blocks instead of JSON RUN_COMMAND',
     '- File attachment / canvas / copy-code UI',
     '- Bare code without OB_FILE markers',
     '- JSON-only operations without file blocks',
