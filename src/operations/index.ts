@@ -6,6 +6,7 @@ import fs from 'fs-extra';
 import type { FileOperation } from '../core/index.js';
 import { normalizeMultilineText } from '../parser/markdown-agent.js';
 import { appendHistory } from '../memory/index.js';
+import { expandMkdirOperations, looksLikePowerShellCommand } from './mkdir-normalize.js';
 
 const execAsync = promisify(exec);
 
@@ -27,8 +28,9 @@ export async function planOperations(
 ): Promise<PlannedOperation[]> {
   const root = path.resolve(projectRoot);
   const plans: PlannedOperation[] = [];
+  const normalizedOperations = expandMkdirOperations(operations);
 
-  for (const operation of operations) {
+  for (const operation of normalizedOperations) {
     if (operation.action === 'RUN_COMMAND') {
       plans.push({
         operation,
@@ -197,10 +199,12 @@ async function runShellCommand(command: string, cwd: string): Promise<void> {
     throw new Error('RUN_COMMAND is empty');
   }
 
+  const shell = resolveShell(trimmed);
+
   try {
     const { stdout, stderr } = await execAsync(trimmed, {
       cwd,
-      shell: process.platform === 'win32' ? process.env.COMSPEC ?? 'cmd.exe' : '/bin/sh',
+      shell,
       timeout: 120_000,
       maxBuffer: 2 * 1024 * 1024,
     });
@@ -215,6 +219,18 @@ async function runShellCommand(command: string, cwd: string): Promise<void> {
     const message = error instanceof Error ? error.message : String(error);
     throw new Error(`Command failed: ${message}`);
   }
+}
+
+function resolveShell(command: string): string {
+  if (process.platform !== 'win32') {
+    return '/bin/sh';
+  }
+
+  if (looksLikePowerShellCommand(command)) {
+    return 'powershell.exe';
+  }
+
+  return process.env.COMSPEC ?? 'cmd.exe';
 }
 
 function nextContent(operation: FileOperation, before: string): string {

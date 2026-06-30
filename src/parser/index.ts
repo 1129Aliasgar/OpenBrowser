@@ -13,6 +13,7 @@ import {
   validateMergedFileOperations,
 } from './markdown-agent.js';
 import { FileOperation } from '../core/types/index.js';
+import { expandMkdirOperations } from '../operations/mkdir-normalize.js';
 
 export interface ParseAIResponseOptions {
   conversationId?: string;
@@ -62,13 +63,15 @@ export function parseAIResponse(
   }
 
   const fileBlocks = extractFileBlocks(rawText);
-  const mergedOps = normalizeOperationTextFields(
-    mergeYamlFencesIntoOperations(
-      mergeMarkdownFencesIntoOperations(
-        mergeFileBlocksIntoOperations(operations, fileBlocks, rawText),
+  const mergedOps = expandMkdirOperations(
+    normalizeOperationTextFields(
+      mergeYamlFencesIntoOperations(
+        mergeMarkdownFencesIntoOperations(
+          mergeFileBlocksIntoOperations(operations, fileBlocks, rawText),
+          rawText,
+        ),
         rawText,
       ),
-      rawText,
     ),
   );
   validateMergedFileOperations(mergedOps);

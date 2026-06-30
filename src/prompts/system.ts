@@ -3,6 +3,20 @@ import type { SessionMode } from '../server/session-store.js';
 const OB_FILE_BEGIN = '---OB_FILE_BEGIN:';
 const OB_FILE_END = '---OB_FILE_END---';
 
+const MONOREPO_SCAFFOLD_EXAMPLE = `{
+  "operations": [
+    { "action": "CREATE_FOLDER", "path": "apps" },
+    { "action": "CREATE_FOLDER", "path": "packages" },
+    { "action": "CREATE_FOLDER", "path": "apps/frontend" },
+    { "action": "CREATE_FOLDER", "path": "apps/primary-backend" },
+    { "action": "CREATE_FOLDER", "path": "packages/db" },
+    { "action": "RUN_COMMAND", "command": "cd packages/db && pnpm init" },
+    { "action": "CREATE_FILE", "path": "pnpm-workspace.yaml" },
+    { "action": "CREATE_FILE", "path": "packages/db/schema.prisma" }
+  ],
+  "conversationId": "<uuid-v4>"
+}`;
+
 const RUN_COMMAND_EXAMPLE = `{
   "operations": [
     { "action": "RUN_COMMAND", "command": "docker compose up -d" }
@@ -198,8 +212,17 @@ export function buildAgentSystemPrompt(conversationId: string): string {
     `- For code/config files (.js, .ts, .json, etc.): use ${OB_FILE_BEGIN} path--- blocks with complete content.`,
     '- For README.md and any .md file: use ONE ```markdown fenced block (see below) — NOT OB_FILE blocks.',
     '- Prefer CREATE_FILE over EDIT_FILE for new projects.',
+    '- Do NOT create README.md or other .md files unless the user explicitly asks for them.',
+    '- If the user says "no readme" or "dont include readme", omit all .md files from operations.',
+    '',
+    '## CREATE_FOLDER rules (prefer over mkdir)',
+    '- To create directories, use CREATE_FOLDER — NOT RUN_COMMAND mkdir.',
+    '- CREATE_FOLDER is cross-platform and supports nested paths (e.g. "apps/frontend").',
+    '- One CREATE_FOLDER per directory path.',
+    '- Use RUN_COMMAND only for tools: pnpm init, pnpm install, docker, prisma migrate, etc.',
     '',
     '## Markdown files (.md, README) — copy-paste fence only',
+    '- Only create .md files when the user explicitly requests them.',
     '- When creating or rewriting README.md or any .md file:',
     '  1) JSON: { "action": "CREATE_FILE", "path": "README.md" }',
     '  2) Content: ONE ```markdown ... ``` block with full raw Markdown source after the JSON.',
@@ -225,6 +248,10 @@ export function buildAgentSystemPrompt(conversationId: string): string {
     '- Never put runnable commands only in markdown/bash/shell copy-paste blocks (```bash, ```sh, ```shell, etc.).',
     '- For command-only requests (e.g. "how do I run this file?"), a JSON-only response is sufficient — no OB_FILE blocks needed.',
     '- Put multiple steps in one command with && or ; — do not split commands across separate markdown fences.',
+    '- Do NOT use RUN_COMMAND mkdir/md/New-Item for scaffolding — use CREATE_FOLDER instead.',
+    '- On Windows, RUN_COMMAND runs in cmd.exe (or PowerShell for New-Item / -Force syntax).',
+    '- In JSON command strings, use forward slashes for paths: apps/frontend (not apps\\frontend).',
+    '- Check runtime.platform in project context: on win32, avoid bash-only syntax (mkdir -p with multiple paths).',
     '',
     '## YAML files (.yml, .yaml, docker-compose.yml)',
     `- Use ${OB_FILE_BEGIN} path--- blocks with real line breaks and indentation (same as .js/.json).`,
@@ -238,6 +265,9 @@ export function buildAgentSystemPrompt(conversationId: string): string {
     '',
     '## Full example (new Express app)',
     HYBRID_EXPRESS_EXAMPLE,
+    '',
+    '## Example (monorepo scaffold — CREATE_FOLDER + pnpm init)',
+    MONOREPO_SCAFFOLD_EXAMPLE,
     '',
     '## Example (edit existing file by line number)',
     EDIT_EXISTING_EXAMPLE,
@@ -302,6 +332,11 @@ function buildRetryFormatInstructions(conversationId: string): string {
     `- Code files: CREATE_FILE in JSON + ${OB_FILE_BEGIN} path--- with full plain-text source`,
     '- .md / README: CREATE_FILE in JSON + one ```markdown ... ``` block with full raw markdown source',
     '- Include package.json as CREATE_FILE (not EDIT_FILE) when scaffolding a new app',
+    '- Do NOT add README.md or other .md files unless the user explicitly asked for them',
+    '',
+    'CREATE_FOLDER:',
+    '- Use CREATE_FOLDER for directories — NOT RUN_COMMAND mkdir',
+    '- One path per CREATE_FOLDER (e.g. "apps/frontend")',
     '',
     'EDIT_FILE:',
     `- File missing → CREATE_FILE or EDIT_FILE with full ${OB_FILE_BEGIN} content (file will be created)`,
@@ -311,6 +346,9 @@ function buildRetryFormatInstructions(conversationId: string): string {
     '- Commands go ONLY in JSON: { "action": "RUN_COMMAND", "command": "..." }',
     '- Never use ```bash / ```sh / ```shell blocks for runnable commands',
     '- Command-only replies need JSON only (no file blocks)',
+    '- Do NOT use mkdir/md for folders — use CREATE_FOLDER',
+    '- Use forward slashes in command paths on Windows',
+    '- If mkdir failed: replace with CREATE_FOLDER operations',
     '',
     'YAML (.yml / .yaml):',
     `- Use ${OB_FILE_BEGIN} path--- with real line breaks — NOT \`\`\`yaml fences`,

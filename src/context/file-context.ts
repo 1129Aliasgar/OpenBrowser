@@ -160,13 +160,20 @@ export function formatAgentContextJson(
 ): string {
   const payload = {
     projectSummary: projectSummary ?? null,
+    runtime: {
+      platform: process.platform,
+      shell: process.platform === 'win32' ? process.env.COMSPEC ?? 'cmd.exe' : '/bin/sh',
+    },
     editingRules: [
       'Context files below include line numbers (format: "   1| code").',
       'For EDIT_FILE on an existing file: prefer startLine, endLine, and replace for partial edits.',
       'For code files (.js, .json, .yml, etc.): use ---OB_FILE_BEGIN: path--- ... ---OB_FILE_END--- blocks.',
       'For README.md and .md files: use ONE ```markdown ... ``` fenced block (ask mode = draft only, agent mode = create file).',
+      'Do NOT create README.md or other .md files unless the user explicitly asks for them.',
       'For YAML (.yml/.yaml): use OB_FILE blocks with real line breaks — not ```yaml fences.',
+      'For directories: use CREATE_FOLDER — NOT RUN_COMMAND mkdir/md/New-Item.',
       'For RUN_COMMAND: put commands only in JSON { "action": "RUN_COMMAND", "command": "..." } — never only in ```bash blocks.',
+      'On Windows (runtime.platform win32): use forward slashes in command paths; avoid bash-only mkdir syntax.',
       'Do not use EDIT_FILE on package.json after npm init — use CREATE_FILE with full package.json content instead.',
     ],
     contextFiles: files.map((file) => ({
