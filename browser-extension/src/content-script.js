@@ -145,8 +145,10 @@ async function claimJob(sessionId) {
 
 async function processJob(job) {
   const beforeCount = countAssistantMessages();
+  const threadIsEmpty = beforeCount === 0;
+  const outboundMessage = buildOutboundMessageForThread(job, threadIsEmpty);
 
-  await injectPrompt(job.message);
+  await injectPrompt(outboundMessage);
   await sleep(150);
   await clickSendWhenReady();
 
@@ -158,6 +160,25 @@ async function processJob(job) {
   }
 
   await postBrowserResponse({ sessionId: job.sessionId, text });
+}
+
+function buildOutboundMessageForThread(job, threadIsEmpty) {
+  const message = String(job?.message ?? '');
+  if (!threadIsEmpty || !job?.systemPrompt) {
+    return message;
+  }
+
+  if (message.includes('--- OpenBrowser System Instructions ---')) {
+    return message;
+  }
+
+  return [
+    '--- OpenBrowser System Instructions ---',
+    String(job.systemPrompt),
+    '--- End System Instructions ---',
+    '',
+    message,
+  ].join('\n');
 }
 
 async function injectPrompt(message) {

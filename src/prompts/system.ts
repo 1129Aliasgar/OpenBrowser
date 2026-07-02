@@ -435,12 +435,18 @@ export function buildFullMessage(
   systemPrompt: string,
   userPrompt: string,
   context?: string,
+  options: { includeSystemInstructions?: boolean } = {},
 ): string {
-  const parts = [
-    '--- OpenBrowser System Instructions ---',
-    systemPrompt,
-    '--- End System Instructions ---',
-  ];
+  const includeSystemInstructions = options.includeSystemInstructions ?? true;
+  const parts: string[] = [];
+
+  if (includeSystemInstructions) {
+    parts.push(
+      '--- OpenBrowser System Instructions ---',
+      systemPrompt,
+      '--- End System Instructions ---',
+    );
+  }
 
   if (mode === 'ask' && context) {
     parts.push('', context);

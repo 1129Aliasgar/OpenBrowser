@@ -131,6 +131,7 @@ export async function createBridgeServer(): Promise<FastifyInstance> {
       sessionId: session.id,
       mode: session.mode,
       message: session.message,
+      systemPrompt: session.systemPrompt,
       conversationId: session.conversationId,
       markdownDraft: session.markdownDraft,
     });
@@ -229,6 +230,7 @@ export async function createBridgeServer(): Promise<FastifyInstance> {
         sessionId: session.id,
         mode: session.mode,
         message: session.message,
+        systemPrompt: session.systemPrompt,
         conversationId: session.conversationId,
         markdownDraft: session.markdownDraft,
       },

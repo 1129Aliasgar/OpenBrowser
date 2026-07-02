@@ -46,6 +46,16 @@ import {
 const program = new Command();
 const DEFAULT_PORT = Number(process.env.PORT ?? 5000);
 
+const sessionPrimingState = {
+  askPrimed: false,
+  agentPrimed: false,
+};
+
+interface RunOptions {
+  contextPaths?: string[];
+  interactive?: boolean;
+}
+
 program
   .name('openbrowser')
   .description('Local CLI agent for browser-based AI coding assistants')
@@ -168,11 +178,6 @@ async function waitForBrowserResponse(sessionId: string): Promise<string> {
   });
 }
 
-interface RunOptions {
-  contextPaths?: string[];
-  interactive?: boolean;
-}
-
 function formatAttachmentSummary(
   fileCount: number,
   directoryCount: number,
@@ -195,6 +200,7 @@ async function runAsk(prompt: string, options: RunOptions = {}): Promise<void> {
   const userPrompt = cleanPrompt || prompt;
   const markdownDraft = isMarkdownDraftRequest(userPrompt);
   const systemPrompt = buildAskSystemPrompt({ markdownDraft });
+  const shouldIncludeSystemPrompt = !sessionPrimingState.askPrimed || !options.interactive;
 
   let contextBlock = '';
   if (contextPaths.length > 0) {
@@ -210,7 +216,9 @@ async function runAsk(prompt: string, options: RunOptions = {}): Promise<void> {
     }
   }
 
-  const message = buildFullMessage('ask', systemPrompt, userPrompt, contextBlock);
+  const message = buildFullMessage('ask', systemPrompt, userPrompt, contextBlock, {
+    includeSystemInstructions: shouldIncludeSystemPrompt,
+  });
 
   tracker.step('reading browser', markdownDraft ? 'sending markdown draft' : 'sending prompt');
   writeInfo('sending to browser AI (open ChatGPT with the extension loaded)');
@@ -233,6 +241,7 @@ async function runAsk(prompt: string, options: RunOptions = {}): Promise<void> {
   try {
     const answer = await waitForBrowserResponse(sessionId);
     spinner.stop();
+    sessionPrimingState.askPrimed = true;
 
     tracker.complete(markdownDraft ? 'markdown draft received' : 'response received');
     writeAnswerBlock(answer || '(empty response)');
@@ -289,7 +298,10 @@ async function runAgent(task: string, options: RunOptions = {}): Promise<void> {
 
   const conversationId = crypto.randomUUID();
   const systemPrompt = buildAgentSystemPrompt(conversationId);
-  let message = buildFullMessage('agent', systemPrompt, userTask, context);
+  let hasRetriedWithFullSystem = false;
+  let message = buildFullMessage('agent', systemPrompt, userTask, context, {
+    includeSystemInstructions: !sessionPrimingState.agentPrimed || !options.interactive,
+  });
 
   const maxAttempts = 3;
   let raw = '';
@@ -321,7 +333,14 @@ async function runAgent(task: string, options: RunOptions = {}): Promise<void> {
       }
 
       writeWarning(`Browser capture failed (${captureError}). Retrying...`);
-      message = buildAgentCompactRetryMessage(captureError, conversationId, userTask);
+      const retryBody = buildAgentCompactRetryMessage(captureError, conversationId, userTask);
+      const includeSystem = !hasRetriedWithFullSystem;
+      message = buildFullMessage('agent', systemPrompt, retryBody, context, {
+        includeSystemInstructions: includeSystem,
+      });
+      if (includeSystem) {
+        hasRetriedWithFullSystem = true;
+      }
       continue;
     }
 
@@ -332,7 +351,18 @@ async function runAgent(task: string, options: RunOptions = {}): Promise<void> {
       }
 
       writeWarning('Empty browser response. Retrying...');
-      message = buildAgentCompactRetryMessage('Empty response from browser AI', conversationId, userTask);
+      const retryBody = buildAgentCompactRetryMessage(
+        'Empty response from browser AI',
+        conversationId,
+        userTask,
+      );
+      const includeSystem = !hasRetriedWithFullSystem;
+      message = buildFullMessage('agent', systemPrompt, retryBody, context, {
+        includeSystemInstructions: includeSystem,
+      });
+      if (includeSystem) {
+        hasRetriedWithFullSystem = true;
+      }
       continue;
     }
 
@@ -372,6 +402,7 @@ async function runAgent(task: string, options: RunOptions = {}): Promise<void> {
       });
       writeSuccess(`applied ${operations.length} operation(s)`);
       tracker.complete(`applied ${operations.length} operation(s)`);
+      sessionPrimingState.agentPrimed = true;
       return;
     } catch (error) {
       const validationError = formatError(error);
@@ -381,7 +412,14 @@ async function runAgent(task: string, options: RunOptions = {}): Promise<void> {
       }
 
       writeWarning(`Invalid agent response (${validationError}). Retrying (${attempt}/${maxAttempts - 1})...`);
-      message = buildAgentCompactRetryMessage(validationError, conversationId, userTask);
+      const retryBody = buildAgentCompactRetryMessage(validationError, conversationId, userTask);
+      const includeSystem = !hasRetriedWithFullSystem;
+      message = buildFullMessage('agent', systemPrompt, retryBody, context, {
+        includeSystemInstructions: includeSystem,
+      });
+      if (includeSystem) {
+        hasRetriedWithFullSystem = true;
+      }
     }
   }
 
