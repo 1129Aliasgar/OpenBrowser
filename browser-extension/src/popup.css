@@ -13,8 +13,17 @@ main {
 .header {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  gap: 8px;
   margin-bottom: 12px;
+}
+
+.logo {
+  border-radius: 6px;
+  flex-shrink: 0;
+}
+
+.header h1 {
+  flex: 1;
 }
 
 h1 {

@@ -23,6 +23,34 @@ const OPENBROWSER_PROVIDERS = {
         'button[aria-label="Stop generating"]',
       ],
       markdown: ['.markdown', '.markdown-new-styling', '.prose'],
+      attachButton: [
+        'button[data-testid="composer-plus-btn"]',
+        'button.composer-btn[data-testid="composer-plus-btn"]',
+        'button[aria-label="Add files and more"]',
+        'button[aria-label="Attach files"]',
+        'button[aria-label="Add photos & files"]',
+      ],
+      attachMenuText: [
+        'add photos & files',
+        'add photos and files',
+        'upload file',
+        'attach file',
+        'add files',
+        'files',
+      ],
+      fileInput: [
+        'input[type="file"]',
+        'input[type="file"][accept]',
+        'input[type="file"]:not([disabled])',
+      ],
+      attachmentPreview: [
+        '[data-testid="file-name"]',
+        '[data-testid="attachment-preview"]',
+        '.f3a54b52',
+        '._76cd190',
+        'uploader-file-preview',
+        'gem-attachment',
+      ],
     },
   },
   claude: {
@@ -46,6 +74,8 @@ const OPENBROWSER_PROVIDERS = {
       ],
       stop: ['button[aria-label="Stop response"]', 'button[aria-label="Stop generating"]'],
       markdown: ['.font-claude-message', '.prose', '.markdown'],
+      attachButton: ['button[aria-label="Upload files"]', 'button[aria-label="Attach files"]'],
+      fileInput: ['input[type="file"]'],
     },
   },
   perplexity: {
@@ -63,6 +93,21 @@ const OPENBROWSER_PROVIDERS = {
       assistant: ['[id^="markdown-content-"]', '.prose[data-renderer="lm"]'],
       stop: ['button[aria-label="Stop"]', 'button[aria-label="Stop generating"]'],
       markdown: ['.prose[data-renderer="lm"]', '[id^="markdown-content-"]'],
+      attachButton: [
+        'button[aria-label*="Attach" i]',
+        'button[aria-label*="Upload" i]',
+        'button[aria-label*="paperclip" i]',
+        '[data-testid="attach-button"]',
+        '[data-testid="file-upload-button"]',
+      ],
+      attachMenuText: [
+        'upload files or images',
+        'upload files',
+        'upload file',
+        'attach file',
+        'files',
+      ],
+      fileInput: ['input[type="file"]'],
     },
   },
   glm: {
@@ -127,6 +172,36 @@ const OPENBROWSER_PROVIDERS = {
       ],
       stop: ['button[aria-label="Stop"]'],
       markdown: ['.markdown', '.model-response-text'],
+      attachButton: [
+        'button[aria-label="Open upload file menu"]',
+        'button.upload-card-button',
+        'button[aria-label*="Upload" i]',
+        'button[aria-label*="Attach" i]',
+        'button[aria-label="Add files"]',
+        '.leading-actions-wrapper button',
+        'mat-icon[data-mat-icon-name="add_2"]',
+      ],
+      attachMenuText: ['files', 'upload file', 'add file', 'attach file', 'from device'],
+      attachMenuSelectors: [
+        '[data-test-id="uploader-images-files-button-advanced"] button',
+        'images-files-uploader button.mat-mdc-button',
+        'images-files-uploader gem-button button',
+        '.upload-menu-item button',
+        'button.hidden-local-file-image-selector-button',
+        'button[xapfileselectortrigger]',
+      ],
+      fileInput: [
+        'images-files-uploader input[type="file"]',
+        'input[type="file"]',
+        'input[type="file"][accept]',
+      ],
+      attachmentPreview: [
+        'gem-attachment',
+        'uploader-file-preview',
+        '.gem-attachment',
+        'mat-basic-chip.gem-attachment',
+        '.gem-attachment-extension-label',
+      ],
     },
   },
   deepseek: {
@@ -162,6 +237,25 @@ const OPENBROWSER_PROVIDERS = {
         'div.ds-button[role="button"][aria-label*="Stop"]',
       ],
       markdown: ['.ds-markdown', '.markdown'],
+      attachButton: [
+        'div.ds-button.ds-button--iconLabelPrimary.ds-button--icon.ds-button--capsule[role="button"]',
+        'div.ds-button.ds-button--icon.ds-button--capsule.ds-button--s[role="button"]',
+        'input[type="file"] + div[role="button"]',
+        'button[aria-label="Upload"]',
+        'button[aria-label*="upload" i]',
+        'button[aria-label*="attach" i]',
+      ],
+      attachMenuText: ['upload', 'attach', 'file'],
+      fileInput: [
+        'input[type="file"]',
+        'input[type="file"][accept]',
+      ],
+      attachmentPreview: [
+        '.f3a54b52',
+        '._76cd190',
+        '._5119742',
+        '._75e1990 .f3a54b52',
+      ],
     },
   },
 };
@@ -174,24 +268,103 @@ function getProviderForHost(hostname) {
   );
 }
 
-function queryFirst(selectors) {
+function collectSearchRoots(root = document) {
+  const roots = [root];
+  const elements = root.querySelectorAll?.('*') ?? [];
+
+  for (const element of elements) {
+    if (element.shadowRoot) {
+      roots.push(...collectSearchRoots(element.shadowRoot));
+    }
+  }
+
+  return roots;
+}
+
+function queryFirst(selectors, root = document) {
   for (const selector of selectors) {
-    const node = document.querySelector(selector);
+    const node = root.querySelector?.(selector);
     if (node) {
       return node;
     }
   }
+
+  for (const shadowRoot of collectSearchRoots(root)) {
+    if (shadowRoot === root) {
+      continue;
+    }
+
+    for (const selector of selectors) {
+      const node = shadowRoot.querySelector?.(selector);
+      if (node) {
+        return node;
+      }
+    }
+  }
+
   return null;
 }
 
-function queryAll(selectors) {
+function queryAll(selectors, root = document) {
   for (const selector of selectors) {
-    const nodes = [...document.querySelectorAll(selector)];
+    const nodes = [...(root.querySelectorAll?.(selector) ?? [])];
     if (nodes.length > 0) {
       return nodes;
     }
   }
+
+  for (const shadowRoot of collectSearchRoots(root)) {
+    if (shadowRoot === root) {
+      continue;
+    }
+
+    for (const selector of selectors) {
+      const nodes = [...(shadowRoot.querySelectorAll?.(selector) ?? [])];
+      if (nodes.length > 0) {
+        return nodes;
+      }
+    }
+  }
+
   return [];
+}
+
+function findClickableByText(texts, root = document) {
+  const normalizedTexts = texts.map((text) => text.toLowerCase());
+  const roots = [root, ...collectSearchRoots(root).filter((item) => item !== root)];
+
+  for (const searchRoot of roots) {
+    const candidates = searchRoot.querySelectorAll?.(
+      'button, [role="menuitem"], [role="button"], [role="option"], div[tabindex], span[tabindex], span.gds-body-l, span.gds-body-m',
+    ) ?? [];
+
+    for (const candidate of candidates) {
+      const label = `${candidate.textContent ?? ''} ${candidate.getAttribute('aria-label') ?? ''}`
+        .trim()
+        .toLowerCase();
+
+      if (!label) {
+        continue;
+      }
+
+      if (normalizedTexts.some((text) => label.includes(text))) {
+        return candidate.closest('button, [role="menuitem"], [role="button"]') ?? candidate;
+      }
+    }
+  }
+
+  return null;
+}
+
+function clickElement(element) {
+  if (!element) {
+    return false;
+  }
+
+  element.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
+  element.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true }));
+  element.click();
+  return true;
 }
 
 function getAllProviderHosts() {

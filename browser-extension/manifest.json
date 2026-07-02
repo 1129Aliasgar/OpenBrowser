@@ -3,6 +3,11 @@
   "name": "OpenBrowser Bridge",
   "version": "0.8.2",
   "description": "Connects browser AI chat pages to the local OpenBrowser bridge server.",
+  "icons": {
+    "32": "icons/favicon.png",
+    "64": "icons/favicon.png",
+    "128": "icons/favicon.png"
+  },
   "permissions": ["activeTab", "alarms", "scripting", "storage", "tabs"],
   "host_permissions": [
     "http://127.0.0.1:5000/*",
@@ -44,6 +49,11 @@
   ],
   "action": {
     "default_popup": "src/popup.html",
-    "default_title": "OpenBrowser"
+    "default_title": "OpenBrowser",
+    "default_icon": {
+      "32": "icons/favicon.png",
+      "64": "icons/favicon.png",
+      "128": "icons/favicon.png"
+    }
   }
 }

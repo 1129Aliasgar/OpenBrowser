@@ -24,6 +24,11 @@ import {
 import { extractMarkdownDraftContent } from './parser/markdown-agent.js';
 import { startServer } from './server/index.js';
 import {
+  PROMPT_FILE_NAME,
+  PROMPT_INJECTION_CHAR_LIMIT,
+  shouldDeliverPromptAsFile,
+} from './shared/prompt-delivery.js';
+import {
   AgentStepTracker,
   colors,
   formatError,
@@ -222,6 +227,11 @@ async function runAsk(prompt: string, options: RunOptions = {}): Promise<void> {
 
   tracker.step('reading browser', markdownDraft ? 'sending markdown draft' : 'sending prompt');
   writeInfo('sending to browser AI (open ChatGPT with the extension loaded)');
+  if (shouldDeliverPromptAsFile(message)) {
+    writeInfo(
+      `prompt exceeds ${PROMPT_INJECTION_CHAR_LIMIT} chars — attaching ${PROMPT_FILE_NAME} instead of pasting`,
+    );
+  }
   if (markdownDraft) {
     writeInfo('draft mode: AI will return a markdown block for you to copy');
   }
@@ -309,6 +319,11 @@ async function runAgent(task: string, options: RunOptions = {}): Promise<void> {
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     tracker.step('reading browser', `attempt ${attempt}/${maxAttempts}`);
     writeInfo('sending to browser AI (open ChatGPT with the extension loaded)');
+    if (shouldDeliverPromptAsFile(message)) {
+      writeInfo(
+        `prompt exceeds ${PROMPT_INJECTION_CHAR_LIMIT} chars — attaching ${PROMPT_FILE_NAME} instead of pasting`,
+      );
+    }
 
     const spinner = new WaitingSpinner();
     spinner.start('waiting for agent response');

@@ -1,7 +1,12 @@
+import cfonts from 'cfonts';
+import chalk from 'chalk';
+import gradient from 'gradient-string';
+
 const RESET = '\x1b[0m';
 const BOLD = '\x1b[1m';
 const DIM = '\x1b[2m';
 const ORANGE = '\x1b[38;5;208m';
+const PEACH = '\x1b[38;5;216m';
 const GREEN = '\x1b[32m';
 const RED = '\x1b[31m';
 const YELLOW = '\x1b[33m';
@@ -20,6 +25,7 @@ export const colors = {
   bold: BOLD,
   dim: DIM,
   orange: ORANGE,
+  peach: PEACH,
   green: GREEN,
   red: RED,
   yellow: YELLOW,
@@ -29,12 +35,50 @@ export const colors = {
   gray: GRAY,
 };
 
+const BANNER_PEACH = '#F5C6A8';
+const BANNER_ORANGE = '#FF8C00';
+const BANNER_FONT = 'block';
+
+function mergeAsciiColumns(left: string, right: string): string[] {
+  const leftLines = left.trimEnd().split('\n');
+  const rightLines = right.trimEnd().split('\n');
+  const width = Math.max(...leftLines.map((line) => line.length), 0);
+  const height = Math.max(leftLines.length, rightLines.length);
+  const merged: string[] = [];
+
+  for (let index = 0; index < height; index += 1) {
+    const leftLine = (leftLines[index] ?? '').padEnd(width);
+    const rightLine = rightLines[index] ?? '';
+    merged.push(
+      `${chalk.hex(BANNER_PEACH)(leftLine)}${chalk.hex(BANNER_ORANGE)(rightLine)}`,
+    );
+  }
+
+  return merged;
+}
+
 export function printBanner(): void {
-  const line = `${GRAY}${'─'.repeat(DIVIDER_WIDTH)}${RESET}`;
-  process.stdout.write(`\n${line}\n`);
-  process.stdout.write(`${ORANGE}${BOLD}  openbrowser${RESET}\n`);
-  process.stdout.write(`${DIM}  Browser AI → your local project${RESET}\n`);
-  process.stdout.write(`${line}\n\n`);
+  const fontOptions = {
+    font: BANNER_FONT,
+    align: 'left' as const,
+    colors: false as const,
+    env: 'node' as const,
+    lineHeight: 1,
+  };
+
+  const openArt = cfonts.render('Open', fontOptions).string;
+  const browserArt = cfonts.render('Browser', fontOptions).string;
+  const titleLines = mergeAsciiColumns(openArt, browserArt);
+  const tagline = gradient([BANNER_PEACH, BANNER_ORANGE])(
+    'TURN BROWSER AI INTO A LOCAL CODING AGENT',
+  );
+
+  process.stdout.write('\n');
+  for (const line of titleLines) {
+    process.stdout.write(`${line}\n`);
+  }
+  process.stdout.write(`\n${tagline}\n`);
+  process.stdout.write(`${chalk.hex('#8b949e')('Browser AI → your local project')}\n\n`);
 }
 
 export function printModeMenu(): void {

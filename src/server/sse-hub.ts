@@ -1,10 +1,14 @@
 import type { ServerResponse } from 'node:http';
 import type { PromptSession } from './session-store.js';
+import type { PromptDelivery } from '../shared/prompt-delivery.js';
 
 export interface BrowserJobEvent {
   sessionId: string;
   mode: PromptSession['mode'];
   message: string;
+  composerMessage: string;
+  delivery: PromptDelivery;
+  promptFileName?: string;
   systemPrompt: string;
   conversationId: string;
   markdownDraft?: boolean;

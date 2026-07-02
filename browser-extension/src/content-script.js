@@ -146,9 +146,25 @@ async function claimJob(sessionId) {
 async function processJob(job) {
   const beforeCount = countAssistantMessages();
   const threadIsEmpty = beforeCount === 0;
-  const outboundMessage = buildOutboundMessageForThread(job, threadIsEmpty);
 
-  await injectPrompt(outboundMessage);
+  if (job.delivery === 'file') {
+    const composerMessage = job.composerMessage ?? job.message;
+    const attached = await attachPromptFile(job);
+    if (!attached) {
+      const filePayload = await bridgeRequest(`/browser/prompt-file/${job.sessionId}`);
+      const fullMessage = String(filePayload?.content ?? '');
+      if (!fullMessage) {
+        throw new Error('Prompt file from bridge server was empty.');
+      }
+      await injectPrompt(fullMessage);
+    } else {
+      await injectPrompt(composerMessage);
+    }
+  } else {
+    const outboundMessage = buildOutboundMessageForThread(job, threadIsEmpty);
+    await injectPrompt(outboundMessage);
+  }
+
   await sleep(150);
   await clickSendWhenReady();
 
@@ -179,6 +195,269 @@ function buildOutboundMessageForThread(job, threadIsEmpty) {
     '',
     message,
   ].join('\n');
+}
+
+async function attachPromptFile(job) {
+  const fileName = job.promptFileName ?? 'openbrowser-prompt.txt';
+  const filePayload = await bridgeRequest(`/browser/prompt-file/${job.sessionId}`);
+  const content = String(filePayload?.content ?? '');
+
+  if (!content) {
+    throw new Error('Prompt file from bridge server was empty.');
+  }
+
+  const file = new File([content], fileName, { type: 'text/plain' });
+  const fileSelectors = provider?.selectors?.fileInput ?? ['input[type="file"]'];
+
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    if (await tryAttachOnExistingInputs(file, fileName, fileSelectors)) {
+      return true;
+    }
+
+    await openUploadMenuForProvider(attempt);
+    await sleep(attempt < 2 ? 900 : 1400);
+
+    if (await tryAttachOnExistingInputs(file, fileName, fileSelectors)) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+async function tryAttachOnExistingInputs(file, fileName, fileSelectors) {
+  const inputs = findAllUsableFileInputs(fileSelectors);
+
+  for (const fileInput of inputs) {
+    if (await trySetFileAndConfirm(fileInput, file, fileName)) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+async function openUploadMenuForProvider(attempt) {
+  const host = location.hostname;
+
+  if (host.includes('chatgpt.com') || host.includes('openai.com')) {
+    clickElement(
+      queryFirst([
+        'button[data-testid="composer-plus-btn"]',
+        'button[aria-label="Add files and more"]',
+        'button.composer-btn[data-testid="composer-plus-btn"]',
+      ]),
+    );
+    await sleep(700);
+    clickElement(
+      findClickableByText([
+        'add photos & files',
+        'add photos and files',
+        'upload file',
+        'attach file',
+        'add files',
+      ]),
+    );
+    return;
+  }
+
+  if (host.includes('gemini.google.com')) {
+    if (attempt === 0) {
+      const existingInput = queryFirst([
+        'images-files-uploader input[type="file"]',
+        'input[type="file"]',
+      ]);
+      if (existingInput) {
+        return;
+      }
+    }
+
+    clickElement(
+      queryFirst([
+        'button[aria-label="Open upload file menu"]',
+        'button.upload-card-button',
+        'button[aria-label*="Upload" i]',
+        'button[aria-label*="Attach" i]',
+        '.leading-actions-wrapper button',
+      ]),
+    );
+    await sleep(700);
+
+    clickElement(
+      queryFirst(provider?.selectors?.attachMenuSelectors ?? []) ??
+        findClickableByText(['files', 'upload file', 'add file']),
+    );
+    await sleep(700);
+    return;
+  }
+
+  if (host.includes('deepseek.com')) {
+    clickElement(
+      queryFirst([
+        'div.ds-button.ds-button--iconLabelPrimary.ds-button--icon.ds-button--capsule[role="button"]',
+        'div.ds-button.ds-button--icon.ds-button--capsule.ds-button--s[role="button"]',
+        'input[type="file"] + div[role="button"]',
+      ]),
+    );
+    return;
+  }
+
+  if (host.includes('perplexity.ai')) {
+    clickElement(queryFirst(provider?.selectors?.attachButton ?? []));
+    await sleep(700);
+    clickElement(
+      findClickableByText([
+        'upload files or images',
+        'upload files',
+        'upload file',
+        'attach file',
+      ]),
+    );
+    return;
+  }
+
+  clickElement(queryFirst(provider?.selectors?.attachButton ?? []));
+  await sleep(700);
+  clickElement(findClickableByText(provider?.selectors?.attachMenuText ?? ['upload', 'file']));
+}
+
+function findAllUsableFileInputs(selectors) {
+  const found = [];
+  const seen = new Set();
+  const roots = [document, ...collectSearchRoots(document).filter((root) => root !== document)];
+
+  for (const root of roots) {
+    for (const selector of selectors) {
+      const nodes = [...(root.querySelectorAll?.(selector) ?? [])];
+      for (const node of nodes) {
+        if (!(node instanceof HTMLInputElement) || node.type !== 'file' || node.disabled) {
+          continue;
+        }
+
+        if (seen.has(node)) {
+          continue;
+        }
+
+        seen.add(node);
+        found.push(node);
+      }
+    }
+  }
+
+  return found;
+}
+
+async function trySetFileAndConfirm(fileInput, file, fileName) {
+  if (!(await setFileOnInput(fileInput, file))) {
+    return false;
+  }
+
+  await sleep(1500);
+
+  if (fileInput.files?.length > 0) {
+    return true;
+  }
+
+  return hasUploadUiSignal(fileName);
+}
+
+function hasUploadUiSignal(fileName) {
+  if (hasAttachmentPreview(fileName)) {
+    return true;
+  }
+
+  const composerRoot =
+    findPromptInput()?.closest(
+      'form, [class*="composer"], [class*="input-area"], [class*="chat-input"], uploader-file-preview',
+    ) ?? document.body;
+
+  const text = (composerRoot.textContent ?? '').toLowerCase();
+  const baseName = fileName.replace(/\.[^.]+$/, '').toLowerCase();
+
+  return (
+    text.includes('openbrowser-prompt') ||
+    text.includes(baseName) ||
+    text.includes('.txt') ||
+    Boolean(queryFirst(['uploader-file-preview', 'gem-attachment', '.f3a54b52', '._76cd190']))
+  );
+}
+
+async function setFileOnInput(fileInput, file) {
+  try {
+    const dataTransfer = new DataTransfer();
+    dataTransfer.items.add(file);
+    fileInput.files = dataTransfer.files;
+
+    fileInput.dispatchEvent(new Event('focus', { bubbles: true }));
+    fileInput.dispatchEvent(new Event('input', { bubbles: true }));
+    fileInput.dispatchEvent(new Event('change', { bubbles: true }));
+    fileInput.dispatchEvent(
+      new InputEvent('input', {
+        bubbles: true,
+        inputType: 'insertFromPaste',
+        dataTransfer,
+      }),
+    );
+    fileInput.dispatchEvent(new Event('blur', { bubbles: true }));
+    await sleep(1200);
+    return fileInput.files?.length > 0;
+  } catch {
+    return false;
+  }
+}
+
+function hasAttachmentPreview(fileName) {
+  const previewSelectors = provider?.selectors?.attachmentPreview ?? [
+    'gem-attachment',
+    'uploader-file-preview',
+    '.f3a54b52',
+    '._76cd190',
+    '[data-testid="file-name"]',
+  ];
+
+  if (queryFirst(previewSelectors)) {
+    return true;
+  }
+
+  const baseName = fileName.replace(/\.[^.]+$/, '').toLowerCase();
+  const roots = [document, ...collectSearchRoots(document).filter((root) => root !== document)];
+
+  for (const root of roots) {
+    const textNodes = root.querySelectorAll?.(
+      '.gem-attachment-text, .f3a54b52, [data-testid="file-name"], .gem-attachment-extension-label',
+    ) ?? [];
+
+    for (const node of textNodes) {
+      const text = (node.textContent ?? '').trim().toLowerCase();
+      if (!text) {
+        continue;
+      }
+
+      if (
+        text.includes(baseName) ||
+        text.includes('txt') ||
+        text.includes('openbrowser-prompt') ||
+        text.includes('.txt')
+      ) {
+        return true;
+      }
+    }
+  }
+
+  return false;
+}
+
+async function waitForAttachmentPreview(fileName) {
+  const deadline = Date.now() + 4_000;
+
+  while (Date.now() < deadline) {
+    if (hasAttachmentPreview(fileName)) {
+      return true;
+    }
+    await sleep(250);
+  }
+
+  return hasAttachmentPreview(fileName);
 }
 
 async function injectPrompt(message) {

@@ -3,9 +3,15 @@ import cors from '@fastify/cors';
 import Fastify from 'fastify';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { generateContext } from '../context/index.js';
+import { writePromptFile, readPromptFile } from '../memory/index.js';
 import { executeOperations, planOperations } from '../operations/index.js';
 import { validateOperations } from '../protocol/index.js';
 import { logger } from '../shared/index.js';
+import {
+  PROMPT_FILE_COMPOSER_NOTE,
+  PROMPT_FILE_NAME,
+  shouldDeliverPromptAsFile,
+} from '../shared/prompt-delivery.js';
 import {
   addBrowserClient,
   broadcastBrowserJob,
@@ -69,6 +75,11 @@ export async function createBridgeServer(): Promise<FastifyInstance> {
     writeCorsPreflight(reply.raw, request.headers.origin);
   });
 
+  app.options('/browser/prompt-file/:sessionId', async (request, reply) => {
+    reply.hijack();
+    writeCorsPreflight(reply.raw, request.headers.origin);
+  });
+
   app.addHook('preHandler', async (request) => {
     authenticate(request);
   });
@@ -116,21 +127,38 @@ export async function createBridgeServer(): Promise<FastifyInstance> {
       throw new Error('mode, prompt, systemPrompt, message, and conversationId are required');
     }
 
+    const delivery = shouldDeliverPromptAsFile(body.message) ? 'file' : 'text';
+    const composerMessage =
+      delivery === 'file' ? PROMPT_FILE_COMPOSER_NOTE : body.message;
+
     const session = createSession({
       mode: body.mode,
       prompt: body.prompt,
       systemPrompt: body.systemPrompt,
       message: body.message,
+      composerMessage,
+      delivery,
       conversationId: body.conversationId,
       markdownDraft: body.markdownDraft,
     });
 
-    logger.info({ sessionId: session.id, mode: session.mode }, 'Prompt session queued');
+    if (delivery === 'file') {
+      await writePromptFile(process.cwd(), session.id, body.message);
+      logger.info(
+        { sessionId: session.id, chars: body.message.length },
+        'Prompt saved as attachment file (exceeds injection limit)',
+      );
+    }
+
+    logger.info({ sessionId: session.id, mode: session.mode, delivery }, 'Prompt session queued');
 
     broadcastBrowserJob({
       sessionId: session.id,
       mode: session.mode,
-      message: session.message,
+      message: composerMessage,
+      composerMessage,
+      delivery,
+      promptFileName: delivery === 'file' ? PROMPT_FILE_NAME : undefined,
       systemPrompt: session.systemPrompt,
       conversationId: session.conversationId,
       markdownDraft: session.markdownDraft,
@@ -229,11 +257,29 @@ export async function createBridgeServer(): Promise<FastifyInstance> {
       job: {
         sessionId: session.id,
         mode: session.mode,
-        message: session.message,
+        message: session.composerMessage,
+        composerMessage: session.composerMessage,
+        delivery: session.delivery,
+        promptFileName: session.delivery === 'file' ? PROMPT_FILE_NAME : undefined,
         systemPrompt: session.systemPrompt,
         conversationId: session.conversationId,
         markdownDraft: session.markdownDraft,
       },
+    };
+  });
+
+  app.get('/browser/prompt-file/:sessionId', async (request) => {
+    const { sessionId } = request.params as { sessionId: string };
+    const session = getSession(sessionId);
+
+    if (!session || session.delivery !== 'file') {
+      throw new Error('Prompt file not found');
+    }
+
+    const content = await readPromptFile(process.cwd(), sessionId);
+    return {
+      fileName: PROMPT_FILE_NAME,
+      content,
     };
   });
 

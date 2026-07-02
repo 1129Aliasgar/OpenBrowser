@@ -1,4 +1,5 @@
 import crypto from 'node:crypto';
+import type { PromptDelivery } from '../shared/prompt-delivery.js';
 
 export type SessionMode = 'ask' | 'agent';
 
@@ -14,6 +15,8 @@ export interface PromptSession {
   prompt: string;
   systemPrompt: string;
   message: string;
+  composerMessage: string;
+  delivery: PromptDelivery;
   conversationId: string;
   markdownDraft?: boolean;
   status: SessionStatus;
@@ -30,6 +33,8 @@ export interface CreateSessionInput {
   prompt: string;
   systemPrompt: string;
   message: string;
+  composerMessage: string;
+  delivery: PromptDelivery;
   conversationId: string;
   markdownDraft?: boolean;
 }
@@ -43,6 +48,8 @@ export function createSession(input: CreateSessionInput): PromptSession {
     prompt: input.prompt,
     systemPrompt: input.systemPrompt,
     message: input.message,
+    composerMessage: input.composerMessage,
+    delivery: input.delivery,
     conversationId: input.conversationId,
     markdownDraft: input.markdownDraft,
     status: 'pending',

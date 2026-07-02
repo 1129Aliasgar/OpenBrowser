@@ -13,6 +13,46 @@ export const CONTEXT_IGNORE = [
   '**/.turbo/**',
 ];
 
+/** Binary assets are listed in folder trees but never embedded as text context. */
+export const BINARY_CONTEXT_EXTENSIONS = new Set([
+  '.png',
+  '.jpg',
+  '.jpeg',
+  '.gif',
+  '.webp',
+  '.ico',
+  '.bmp',
+  '.tif',
+  '.tiff',
+  '.avif',
+  '.heic',
+  '.woff',
+  '.woff2',
+  '.ttf',
+  '.eot',
+  '.otf',
+  '.pdf',
+  '.zip',
+  '.gz',
+  '.tar',
+  '.7z',
+  '.rar',
+  '.mp3',
+  '.mp4',
+  '.wav',
+  '.mov',
+  '.avi',
+  '.exe',
+  '.dll',
+  '.bin',
+  '.dat',
+]);
+
+export function isTextContextFile(filePath: string): boolean {
+  const ext = path.extname(filePath).toLowerCase();
+  return ext.length === 0 || !BINARY_CONTEXT_EXTENSIONS.has(ext);
+}
+
 const MAX_FILES = 30;
 const MAX_FILE_BYTES = 32_000;
 const MAX_TOTAL_BYTES = 120_000;
@@ -117,12 +157,18 @@ export async function loadContextFiles(
       });
       const relativeDir = path.relative(projectRoot, resolved).replace(/\\/g, '/');
       for (const nestedFile of nested) {
-        filePaths.add(path.posix.join(relativeDir, nestedFile));
+        const relativePath = path.posix.join(relativeDir, nestedFile);
+        if (isTextContextFile(relativePath)) {
+          filePaths.add(relativePath);
+        }
       }
       continue;
     }
 
-    filePaths.add(path.relative(projectRoot, resolved).replace(/\\/g, '/'));
+    const relativePath = path.relative(projectRoot, resolved).replace(/\\/g, '/');
+    if (isTextContextFile(relativePath)) {
+      filePaths.add(relativePath);
+    }
   }
 
   const sortedPaths = [...filePaths].sort().slice(0, MAX_FILES);
@@ -177,7 +223,7 @@ export function formatContextMarkdown(
       '',
       directory.empty
         ? '*(empty directory — no files yet)*'
-        : `*${directory.fileCount} file(s), ${directory.directories.length} subfolder(s)*`,
+        : `*${directory.fileCount} file(s), ${directory.directories.length} subfolder(s). Binary images (png, jpg, etc.) appear in the tree only — not embedded.*`,
       '',
     );
   }
@@ -238,6 +284,7 @@ export function formatAgentContextJson(
     editingRules: [
       'Context files below include line numbers (format: "   1| code").',
       'contextDirectories lists attached folder trees, including empty folders with no files.',
+      'Binary image/media files (png, jpg, gif, webp, etc.) may appear in folder trees but are not embedded in context.',
       'If contextDirectories.empty is true, the folder exists but has no files — use CREATE_FILE, not EDIT_FILE.',
       'For EDIT_FILE on an existing file: prefer startLine, endLine, and replace for partial edits.',
       'For code files (.js, .json, .yml, etc.): use ---OB_FILE_BEGIN: path--- ... ---OB_FILE_END--- blocks.',

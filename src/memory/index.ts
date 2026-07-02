@@ -10,6 +10,7 @@ export const MEMORY_FILES = {
   chat: 'chat.json',
   tasks: 'tasks.json',
   contextSummary: 'context-summary.md',
+  promptsDir: 'prompts',
 } as const;
 
 export interface HistoryEntry {
@@ -62,4 +63,29 @@ async function ensureJson(
   if (!(await fs.pathExists(filePath))) {
     await fs.writeJson(filePath, value, { spaces: 2 });
   }
+}
+
+export function promptFilePath(projectRoot: string, sessionId: string): string {
+  return path.join(
+    memoryPath(projectRoot, MEMORY_FILES.promptsDir),
+    `${sessionId}.txt`,
+  );
+}
+
+export async function writePromptFile(
+  projectRoot: string,
+  sessionId: string,
+  content: string,
+): Promise<string> {
+  const filePath = promptFilePath(projectRoot, sessionId);
+  await fs.ensureDir(path.dirname(filePath));
+  await fs.writeFile(filePath, content, 'utf8');
+  return filePath;
+}
+
+export async function readPromptFile(
+  projectRoot: string,
+  sessionId: string,
+): Promise<string> {
+  return fs.readFile(promptFilePath(projectRoot, sessionId), 'utf8');
 }

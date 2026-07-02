@@ -1,5 +1,7 @@
 export {
   CONTEXT_IGNORE,
+  BINARY_CONTEXT_EXTENSIONS,
+  isTextContextFile,
   formatContextJson,
   formatAgentContextJson,
   formatContextMarkdown,
