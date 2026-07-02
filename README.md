@@ -1,4 +1,12 @@
-# <img src="./src/assest/favicon.png" width="32" style="vertical-align: middle; margin-right: 8px;"> <span style="color: #FFDAB9;">Open</span><span style="color: #FF8C00;">Browser</span>
+<h1 style="display: flex; align-items: center;">
+  <img
+    src="./src/assest/favicon.png"
+    width="32"
+    style="margin-right: 8px;"
+  />
+  <span style="color: #FFDAB9;">Open</span>
+  <span style="color: #FF8C00;">Browser</span>
+</h1>
 
 <p align="center">
   <img src="./src/assest/logo.png" alt="OpenBrowser" width="420" />
