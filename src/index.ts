@@ -1,18 +1,16 @@
 #!/usr/bin/env node
 import crypto from 'node:crypto';
-import readline from 'node:readline/promises';
-import type { Completer } from 'node:readline';
-import { stdin as input, stdout as output } from 'node:process';
+import { stdout as output } from 'node:process';
 import { Command } from 'commander';
 import { submitPrompt, waitForSessionResponse } from './client/bridge-client.js';
 import {
   formatAgentContextJson,
   formatContextMarkdown,
   generateContext,
-  getAtCompletion,
   listContextChoices,
-  loadContextFiles,
+  loadContextAttachments,
   parseAtRefs,
+  readBufferedPrompt,
 } from './context/index.js';
 import { parseAIResponse } from './parser/index.js';
 import { executeOperations, planOperations } from './operations/index.js';
@@ -25,7 +23,25 @@ import {
 } from './prompts/system.js';
 import { extractMarkdownDraftContent } from './parser/markdown-agent.js';
 import { startServer } from './server/index.js';
-import { AgentStepTracker, AnswerStream, formatError, type TrackerStep } from './shared/index.js';
+import {
+  AgentStepTracker,
+  colors,
+  formatError,
+  formatModeChoicePrompt,
+  formatModePrompt,
+  printBanner,
+  printModeMenu,
+  WaitingSpinner,
+  writeAnswerBlock,
+  writeAtHint,
+  writeDiffBlock,
+  writeError,
+  writeInfo,
+  writeSessionEnd,
+  writeSuccess,
+  writeWarning,
+  type TrackerStep,
+} from './shared/index.js';
 
 const program = new Command();
 const DEFAULT_PORT = Number(process.env.PORT ?? 5000);
@@ -41,6 +57,7 @@ program
   .argument('<prompt>', 'Question or prompt to send to AI')
   .action(async (prompt: string) => {
     await withBridge(async () => {
+      printBanner();
       await runAsk(prompt);
     });
   });
@@ -51,6 +68,7 @@ program
   .argument('<task>', 'Task description for the AI agent')
   .action(async (task: string) => {
     await withBridge(async () => {
+      printBanner();
       await runAgent(task);
     });
   });
@@ -78,60 +96,41 @@ async function withBridge<T>(callback: () => Promise<T>): Promise<T> {
 }
 
 async function runInteractive(): Promise<void> {
+  printBanner();
+
   const choices = await listContextChoices(process.cwd());
-  const completer: Completer = (line) => {
-    const { completion } = getAtCompletion(line, choices);
-    if (!completion) {
-      return [[], line];
+
+  while (true) {
+    const mode = await chooseMode(choices);
+    if (mode === 'exit') {
+      writeSessionEnd('goodbye');
+      break;
     }
 
-    const atMatch = /(?:^|\s)@([^\s@]*)$/.exec(line);
-    const partial = atMatch?.[1] ?? '';
-    const atPos = line.lastIndexOf(`@${partial}`);
-    const completed = `${line.slice(0, atPos)}@${completion}`;
-    return [[completed], line];
-  };
-
-  const rl = readline.createInterface({
-    input,
-    output,
-    terminal: true,
-    completer,
-  });
-
-  try {
-    while (true) {
-      const mode = await chooseMode(rl);
-      if (mode === 'exit') {
-        break;
-      }
-
-      const { prompt, contextPaths } = await readPromptWithContext(rl, mode);
-      if (!prompt && contextPaths.length === 0) {
-        continue;
-      }
-
-      if (mode === 'ask') {
-        await runAsk(prompt, { rl, contextPaths });
-      } else {
-        await runAgent(prompt, { rl, contextPaths });
-      }
+    const { prompt, contextPaths } = await readPromptWithContext(mode, choices);
+    if (!prompt && contextPaths.length === 0) {
+      continue;
     }
-  } finally {
-    rl.close();
+
+    if (mode === 'ask') {
+      await runAsk(prompt, { contextPaths, interactive: true });
+    } else {
+      await runAgent(prompt, { contextPaths, interactive: true });
+    }
+
+    writeSessionEnd(mode === 'ask' ? 'ask session complete' : 'agent session complete');
   }
 }
 
 async function chooseMode(
-  rl: readline.Interface,
+  choices: string[],
 ): Promise<'ask' | 'agent' | 'exit'> {
-  output.write('\nSelect mode:\n');
-  output.write('  1. ask (chat / draft README & .md for manual copy)\n');
-  output.write('  2. agent (create & edit project files)\n');
-  output.write('  q. exit\n');
+  printModeMenu();
 
   while (true) {
-    const answer = (await rl.question('mode> ')).trim().toLowerCase();
+    const answer = (
+      await readBufferedPrompt(formatModeChoicePrompt(), { choices })
+    ).trim().toLowerCase();
     if (answer === '1' || answer === 'ask') {
       return 'ask';
     }
@@ -141,19 +140,18 @@ async function chooseMode(
     if (answer === 'q' || answer === 'quit' || answer === 'exit') {
       return 'exit';
     }
-    output.write('Choose 1, 2, or q.\n');
+    writeWarning('Choose 1, 2, or q.');
   }
 }
 
 async function readPromptWithContext(
-  rl: readline.Interface,
   mode: 'ask' | 'agent',
+  choices: string[],
 ): Promise<{ prompt: string; contextPaths: string[] }> {
-  output.write('\nType @ for file suggestions (Tab to complete). Enter prompt when ready.\n');
+  writeAtHint();
 
   while (true) {
-    const label = `${mode}> `;
-    const line = (await rl.question(label)).trim();
+    const line = (await readBufferedPrompt(formatModePrompt(mode), { choices })).trim();
 
     if (!line) {
       continue;
@@ -164,25 +162,29 @@ async function readPromptWithContext(
   }
 }
 
-async function waitForBrowserResponse(
-  sessionId: string,
-  rl?: readline.Interface,
-  options: { onChunk?: (text: string) => void } = {},
-): Promise<string> {
-  rl?.pause();
-  try {
-    return await waitForSessionResponse(sessionId, {
-      port: DEFAULT_PORT,
-      onChunk: options.onChunk,
-    });
-  } finally {
-    rl?.resume();
-  }
+async function waitForBrowserResponse(sessionId: string): Promise<string> {
+  return waitForSessionResponse(sessionId, {
+    port: DEFAULT_PORT,
+  });
 }
 
 interface RunOptions {
-  rl?: readline.Interface;
   contextPaths?: string[];
+  interactive?: boolean;
+}
+
+function formatAttachmentSummary(
+  fileCount: number,
+  directoryCount: number,
+): string {
+  const parts: string[] = [];
+  if (fileCount > 0) {
+    parts.push(`${fileCount} file(s)`);
+  }
+  if (directoryCount > 0) {
+    parts.push(`${directoryCount} folder tree(s)`);
+  }
+  return parts.join(', ');
 }
 
 async function runAsk(prompt: string, options: RunOptions = {}): Promise<void> {
@@ -197,27 +199,27 @@ async function runAsk(prompt: string, options: RunOptions = {}): Promise<void> {
   let contextBlock = '';
   if (contextPaths.length > 0) {
     tracker.step('reading project', `${contextPaths.length} context reference(s)`);
-    const files = await loadContextFiles(process.cwd(), contextPaths);
-    contextBlock = formatContextMarkdown(files);
-    if (files.length === 0) {
-      output.write(
-        `\nWarning: @ references [${contextPaths.join(', ')}] matched no files. Use Tab after @ to complete paths.\n`,
+    const attachment = await loadContextAttachments(process.cwd(), contextPaths);
+    contextBlock = formatContextMarkdown(attachment.files, attachment.directories);
+    if (attachment.files.length === 0 && attachment.directories.length === 0) {
+      writeWarning(
+        `@ references [${contextPaths.join(', ')}] matched nothing. Use Tab after @ to complete paths.`,
       );
     } else {
-      output.write(`\nAttached ${files.length} file(s) as Markdown context.\n`);
+      writeInfo(`attached ${formatAttachmentSummary(attachment.files.length, attachment.directories.length)} as Markdown context`);
     }
   }
 
   const message = buildFullMessage('ask', systemPrompt, userPrompt, contextBlock);
 
-  tracker.step('reading browser', markdownDraft ? 'sending markdown draft to browser' : 'sending prompt to ChatGPT');
-  output.write('\nSending to browser AI (open ChatGPT with the extension loaded)...\n');
+  tracker.step('reading browser', markdownDraft ? 'sending markdown draft' : 'sending prompt');
+  writeInfo('sending to browser AI (open ChatGPT with the extension loaded)');
   if (markdownDraft) {
-    output.write('Draft mode: AI will return a ```markdown block for you to copy manually.\n');
+    writeInfo('draft mode: AI will return a markdown block for you to copy');
   }
 
-  const stream = new AnswerStream();
-  stream.startWaiting();
+  const spinner = new WaitingSpinner();
+  spinner.start('waiting for response');
 
   const { sessionId } = await submitPrompt({
     mode: 'ask',
@@ -229,30 +231,30 @@ async function runAsk(prompt: string, options: RunOptions = {}): Promise<void> {
   });
 
   try {
-    const answer = await waitForBrowserResponse(sessionId, options.rl, {
-      onChunk: (text) => stream.onChunk(text),
-    });
+    const answer = await waitForBrowserResponse(sessionId);
+    spinner.stop();
 
-    tracker.complete(markdownDraft ? 'markdown draft received' : 'ask response received');
-    stream.finish(answer || '(empty response)', { rewriteIfLonger: markdownDraft });
+    tracker.complete(markdownDraft ? 'markdown draft received' : 'response received');
+    writeAnswerBlock(answer || '(empty response)');
 
     if (markdownDraft && answer?.trim()) {
       const draft = extractMarkdownDraftContent(answer);
       if (draft && draft.length > 0) {
-        output.write('\n--- Markdown draft (full copy — browser or below) ---\n\n');
+        output.write(`\n${colors.dim}--- Markdown draft (copy below) ---${colors.reset}\n\n`);
         output.write(draft);
-        output.write('\n\n--- End draft ---\n');
+        output.write(`\n\n${colors.dim}--- End draft ---${colors.reset}\n`);
       } else {
-        output.write(
-          '\nCould not extract markdown draft from capture. Copy the ```markdown code block from the browser.\n',
-        );
+        writeWarning('Could not extract markdown draft. Copy the markdown block from the browser.');
       }
-      output.write(
-        '\nTo create the file in your project, switch to agent mode and say: create README.md\n',
-      );
+      writeInfo('to create the file in your project, switch to agent mode and say: create README.md');
     }
   } catch (error) {
-    output.write(`\nAsk error: ${formatError(error)}\n`);
+    spinner.stop();
+    writeError(`Ask error: ${formatError(error)}`);
+  } finally {
+    if (!options.interactive) {
+      writeSessionEnd('ask session complete');
+    }
   }
 }
 
@@ -265,15 +267,23 @@ async function runAgent(task: string, options: RunOptions = {}): Promise<void> {
   const userTask = cleanPrompt || task;
 
   const projectSummary = await generateContext(process.cwd());
-  const attachedFiles =
-    contextPaths.length > 0 ? await loadContextFiles(process.cwd(), contextPaths) : [];
-  const context = formatAgentContextJson(attachedFiles, projectSummary);
+  const attachment =
+    contextPaths.length > 0
+      ? await loadContextAttachments(process.cwd(), contextPaths)
+      : { files: [], directories: [] };
+  const context = formatAgentContextJson(
+    attachment.files,
+    projectSummary,
+    attachment.directories,
+  );
 
-  if (attachedFiles.length > 0) {
-    output.write(`\nAttached ${attachedFiles.length} file(s) as JSON context.\n`);
+  if (attachment.files.length > 0 || attachment.directories.length > 0) {
+    writeInfo(
+      `attached ${formatAttachmentSummary(attachment.files.length, attachment.directories.length)} as JSON context`,
+    );
   } else if (contextPaths.length > 0) {
-    output.write(
-      `\nWarning: @ references [${contextPaths.join(', ')}] matched no files. Use Tab after @ to complete paths.\n`,
+    writeWarning(
+      `@ references [${contextPaths.join(', ')}] matched nothing. Use Tab after @ to complete paths.`,
     );
   }
 
@@ -285,8 +295,11 @@ async function runAgent(task: string, options: RunOptions = {}): Promise<void> {
   let raw = '';
 
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-    tracker.step('reading browser', `sending task to ChatGPT (attempt ${attempt}/${maxAttempts})`);
-    output.write('\nSending to browser AI (open ChatGPT with the extension loaded)...\n');
+    tracker.step('reading browser', `attempt ${attempt}/${maxAttempts}`);
+    writeInfo('sending to browser AI (open ChatGPT with the extension loaded)');
+
+    const spinner = new WaitingSpinner();
+    spinner.start('waiting for agent response');
 
     const { sessionId } = await submitPrompt({
       mode: 'agent',
@@ -297,15 +310,17 @@ async function runAgent(task: string, options: RunOptions = {}): Promise<void> {
     });
 
     try {
-      raw = await waitForBrowserResponse(sessionId, options.rl);
+      raw = await waitForBrowserResponse(sessionId);
+      spinner.stop();
     } catch (error) {
+      spinner.stop();
       const captureError = formatError(error);
       if (attempt >= maxAttempts) {
-        output.write(`\nAgent error: ${captureError}\n`);
+        writeError(`Agent error: ${captureError}`);
         return;
       }
 
-      output.write(`\nBrowser capture failed (${captureError}). Retrying...\n`);
+      writeWarning(`Browser capture failed (${captureError}). Retrying...`);
       message = buildAgentCompactRetryMessage(captureError, conversationId, userTask);
       continue;
     }
@@ -316,7 +331,7 @@ async function runAgent(task: string, options: RunOptions = {}): Promise<void> {
         return;
       }
 
-      output.write('\nEmpty browser response. Retrying...\n');
+      writeWarning('Empty browser response. Retrying...');
       message = buildAgentCompactRetryMessage('Empty response from browser AI', conversationId, userTask);
       continue;
     }
@@ -335,52 +350,48 @@ async function runAgent(task: string, options: RunOptions = {}): Promise<void> {
 
       const plans = await planOperations(operations, process.cwd());
 
+      output.write(`\n${colors.bold}Changes preview${colors.reset} ${colors.dim}(${plans.length} operation(s))${colors.reset}\n`);
       for (const plan of plans) {
-        output.write(`\n${plan.diff}\n`);
+        writeDiffBlock(plan.diff);
       }
 
-      const approved = await confirm('Apply these changes?', options.rl);
+      const approved = await confirm('Apply these changes?');
       if (!approved) {
         tracker.complete('rejected');
+        writeWarning('changes not applied');
         return;
       }
 
       if (hasMarkdownCreate) {
-        output.write(
-          '\nNote: README/.md content was captured from a ```markdown code block in the browser.\n',
-        );
+        writeInfo('README/.md content captured from a markdown block in the browser');
       }
 
       await executeOperations(operations, process.cwd(), {
         conversationId: payload.conversationId,
         onStep: (step, detail) => tracker.step(step as TrackerStep, detail),
       });
+      writeSuccess(`applied ${operations.length} operation(s)`);
       tracker.complete(`applied ${operations.length} operation(s)`);
       return;
     } catch (error) {
       const validationError = formatError(error);
       if (attempt >= maxAttempts) {
-        output.write(`\nAgent error: ${validationError}\n`);
+        writeError(`Agent error: ${validationError}`);
         return;
       }
 
-      output.write(`\nInvalid agent response (${validationError}). Retrying (${attempt}/${maxAttempts - 1})...\n`);
+      writeWarning(`Invalid agent response (${validationError}). Retrying (${attempt}/${maxAttempts - 1})...`);
       message = buildAgentCompactRetryMessage(validationError, conversationId, userTask);
     }
   }
+
+  if (!options.interactive) {
+    writeSessionEnd('agent session complete');
+  }
 }
 
-async function confirm(
-  question: string,
-  existingRl?: readline.Interface,
-): Promise<boolean> {
-  const rl = existingRl ?? readline.createInterface({ input, output });
-  try {
-    const answer = (await rl.question(`${question} [y/N] `)).trim().toLowerCase();
-    return answer === 'y' || answer === 'yes';
-  } finally {
-    if (!existingRl) {
-      rl.close();
-    }
-  }
+async function confirm(question: string): Promise<boolean> {
+  const prompt = `${colors.yellow}?${colors.reset} ${question} ${colors.dim}[y/N]${colors.reset} `;
+  const answer = (await readBufferedPrompt(prompt)).trim().toLowerCase();
+  return answer === 'y' || answer === 'yes';
 }

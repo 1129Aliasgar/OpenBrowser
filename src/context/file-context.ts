@@ -1,6 +1,7 @@
 import path from 'node:path';
 import fg from 'fast-glob';
 import fs from 'fs-extra';
+import { collectProjectDirectories, scanDirectoryTree, type ContextDirectory } from './directory-tree.js';
 
 export const CONTEXT_IGNORE = [
   '**/node_modules/**',
@@ -23,6 +24,13 @@ export interface ContextFile {
   truncated: boolean;
 }
 
+export interface ContextAttachment {
+  files: ContextFile[];
+  directories: ContextDirectory[];
+}
+
+export type { ContextDirectory } from './directory-tree.js';
+
 export async function listContextChoices(projectRoot: string): Promise<string[]> {
   const files = await fg('**/*', {
     cwd: projectRoot,
@@ -39,6 +47,10 @@ export async function listContextChoices(projectRoot: string): Promise<string[]>
     }
   }
 
+  for (const dir of await collectProjectDirectories(projectRoot)) {
+    dirs.add(dir);
+  }
+
   const topLevel = await fs.readdir(projectRoot);
   for (const entry of topLevel) {
     const fullPath = path.join(projectRoot, entry);
@@ -48,6 +60,34 @@ export async function listContextChoices(projectRoot: string): Promise<string[]>
   }
 
   return [...[...dirs].sort(), ...files.sort()];
+}
+
+export async function loadContextAttachments(
+  projectRoot: string,
+  refs: string[],
+): Promise<ContextAttachment> {
+  const files = await loadContextFiles(projectRoot, refs);
+  const directories: ContextDirectory[] = [];
+  const uniqueRefs = [...new Set(refs.map((ref) => ref.replace(/\\/g, '/').replace(/\/$/, '')))];
+
+  for (const ref of uniqueRefs) {
+    const resolved = path.resolve(projectRoot, ref);
+    if (!(await fs.pathExists(resolved))) {
+      continue;
+    }
+
+    const stat = await fs.stat(resolved);
+    if (!stat.isDirectory()) {
+      continue;
+    }
+
+    const tree = await scanDirectoryTree(projectRoot, ref);
+    if (tree) {
+      directories.push(tree);
+    }
+  }
+
+  return { files, directories };
 }
 
 export async function loadContextFiles(
@@ -117,32 +157,62 @@ export async function loadContextFiles(
   return loaded;
 }
 
-export function formatContextMarkdown(files: ContextFile[]): string {
-  if (files.length === 0) {
+export function formatContextMarkdown(
+  files: ContextFile[],
+  directories: ContextDirectory[] = [],
+): string {
+  if (files.length === 0 && directories.length === 0) {
     return '';
   }
 
-  const sections = files.map((file) => {
+  const sections: string[] = [];
+
+  for (const directory of directories) {
+    sections.push(
+      `### ${directory.relativePath}/`,
+      '',
+      '```text',
+      directory.treeText,
+      '```',
+      '',
+      directory.empty
+        ? '*(empty directory — no files yet)*'
+        : `*${directory.fileCount} file(s), ${directory.directories.length} subfolder(s)*`,
+      '',
+    );
+  }
+
+  for (const file of files) {
     const truncatedNote = file.truncated ? '\n\n*(truncated)*' : '';
-    return [
+    sections.push(
       `### ${file.path}`,
       '',
       '```' + file.language,
       file.content,
       '```',
       truncatedNote,
-    ].join('\n');
-  });
+      '',
+    );
+  }
 
-  return ['--- Context Files ---', '', ...sections, '', '--- End Context Files ---'].join('\n');
+  return ['--- Context Files ---', '', ...sections, '--- End Context Files ---'].join('\n');
 }
 
 export function formatContextJson(
   files: ContextFile[],
   projectSummary?: string,
+  directories: ContextDirectory[] = [],
 ): string {
   const payload = {
     projectSummary: projectSummary ?? null,
+    contextDirectories: directories.map((directory) => ({
+      path: directory.relativePath,
+      empty: directory.empty,
+      fileCount: directory.fileCount,
+      directories: directory.directories,
+      files: directory.files,
+      treeText: directory.treeText,
+    })),
     contextFiles: files.map((file) => ({
       path: file.path,
       language: file.language,
@@ -157,6 +227,7 @@ export function formatContextJson(
 export function formatAgentContextJson(
   files: ContextFile[],
   projectSummary?: string,
+  directories: ContextDirectory[] = [],
 ): string {
   const payload = {
     projectSummary: projectSummary ?? null,
@@ -166,6 +237,8 @@ export function formatAgentContextJson(
     },
     editingRules: [
       'Context files below include line numbers (format: "   1| code").',
+      'contextDirectories lists attached folder trees, including empty folders with no files.',
+      'If contextDirectories.empty is true, the folder exists but has no files — use CREATE_FILE, not EDIT_FILE.',
       'For EDIT_FILE on an existing file: prefer startLine, endLine, and replace for partial edits.',
       'For code files (.js, .json, .yml, etc.): use ---OB_FILE_BEGIN: path--- ... ---OB_FILE_END--- blocks.',
       'For README.md and .md files: use ONE ```markdown ... ``` fenced block (ask mode = draft only, agent mode = create file).',
@@ -179,6 +252,14 @@ export function formatAgentContextJson(
       'On Windows (runtime.platform win32): use forward slashes in command paths; avoid bash-only mkdir syntax.',
       'Do not use EDIT_FILE on package.json after npm init — use CREATE_FILE with full package.json content instead.',
     ],
+    contextDirectories: directories.map((directory) => ({
+      path: directory.relativePath,
+      empty: directory.empty,
+      fileCount: directory.fileCount,
+      directories: directory.directories,
+      files: directory.files,
+      treeText: directory.treeText,
+    })),
     contextFiles: files.map((file) => ({
       path: file.path,
       language: file.language,
