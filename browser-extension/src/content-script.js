@@ -7,6 +7,8 @@ const CHUNK_MIN_CHARS = 24;
 const CHUNK_MIN_MS = 250;
 const SEND_RETRY_MS = 250;
 const SEND_MAX_RETRIES = 20;
+const FILE_UPLOAD_SEND_WAIT_MS = 5_000;
+const FILE_UPLOAD_SEND_RETRY_WAIT_MS = 8_000;
 const FINISH_RECHECK_MS = 600;
 
 let running = false;
@@ -157,16 +159,20 @@ async function processJob(job) {
         throw new Error('Prompt file from bridge server was empty.');
       }
       await injectPrompt(fullMessage);
+      await sleep(150);
+      await clickSendWhenReady();
     } else {
-      await injectPrompt(composerMessage);
+      await clickSendAfterFileAttach(
+        job.promptFileName ?? 'openbrowser-prompt.txt',
+        composerMessage,
+      );
     }
   } else {
     const outboundMessage = buildOutboundMessageForThread(job, threadIsEmpty);
     await injectPrompt(outboundMessage);
+    await sleep(150);
+    await clickSendWhenReady();
   }
-
-  await sleep(150);
-  await clickSendWhenReady();
 
   const text = await waitForPlainResponse(beforeCount, job.mode, job.sessionId, {
     markdownDraft: job.markdownDraft,
@@ -197,7 +203,75 @@ function buildOutboundMessageForThread(job, threadIsEmpty) {
   ].join('\n');
 }
 
+const MAX_ATTACH_ATTEMPTS = 2;
+const ATTACH_PREVIEW_POLL_MS = 300;
+const ATTACH_PREVIEW_TIMEOUT_MS = 2_500;
+const ATTACH_SHADOW_MAX_DEPTH = 4;
+
+let attachShadowRoots = null;
+
+function clearAttachDomCache() {
+  attachShadowRoots = null;
+}
+
+function getAttachShadowRoots() {
+  if (attachShadowRoots) {
+    return attachShadowRoots;
+  }
+
+  const roots = [];
+  const queue = [{ root: document, depth: 0 }];
+
+  while (queue.length > 0) {
+    const { root, depth } = queue.shift();
+    if (depth >= ATTACH_SHADOW_MAX_DEPTH) {
+      continue;
+    }
+
+    const elements = root.querySelectorAll?.('*') ?? [];
+    for (const element of elements) {
+      if (!element.shadowRoot) {
+        continue;
+      }
+
+      roots.push(element.shadowRoot);
+      queue.push({ root: element.shadowRoot, depth: depth + 1 });
+    }
+  }
+
+  attachShadowRoots = roots;
+  return roots;
+}
+
+function queryFirstForAttach(selectors, root = document) {
+  const selectorList = Array.isArray(selectors) ? selectors : [selectors];
+
+  for (const selector of selectorList) {
+    const node = root.querySelector?.(selector);
+    if (node) {
+      return node;
+    }
+  }
+
+  for (const shadowRoot of getAttachShadowRoots()) {
+    for (const selector of selectorList) {
+      const node = shadowRoot.querySelector?.(selector);
+      if (node) {
+        return node;
+      }
+    }
+  }
+
+  return null;
+}
+
+function isPromptAlreadyAttached(fileName) {
+  return hasUploadUiSignal(fileName);
+}
+
 async function attachPromptFile(job) {
+  clearAttachDomCache();
+
   const fileName = job.promptFileName ?? 'openbrowser-prompt.txt';
   const filePayload = await bridgeRequest(`/browser/prompt-file/${job.sessionId}`);
   const content = String(filePayload?.content ?? '');
@@ -206,49 +280,73 @@ async function attachPromptFile(job) {
     throw new Error('Prompt file from bridge server was empty.');
   }
 
+  if (isPromptAlreadyAttached(fileName)) {
+    return true;
+  }
+
   const file = new File([content], fileName, { type: 'text/plain' });
   const fileSelectors = provider?.selectors?.fileInput ?? ['input[type="file"]'];
 
-  for (let attempt = 0; attempt < 5; attempt += 1) {
-    if (await tryAttachOnExistingInputs(file, fileName, fileSelectors)) {
+  if (await tryAttachOnBestInput(file, fileName, fileSelectors)) {
+    return true;
+  }
+
+  for (let attempt = 1; attempt < MAX_ATTACH_ATTEMPTS; attempt += 1) {
+    if (isPromptAlreadyAttached(fileName)) {
       return true;
     }
 
-    await openUploadMenuForProvider(attempt);
-    await sleep(attempt < 2 ? 900 : 1400);
+    await openUploadMenuForProvider(fileName);
+    await sleep(700);
 
-    if (await tryAttachOnExistingInputs(file, fileName, fileSelectors)) {
+    if (await tryAttachOnBestInput(file, fileName, fileSelectors)) {
       return true;
     }
   }
 
-  return false;
+  return waitForAttachComplete(fileName);
 }
 
-async function tryAttachOnExistingInputs(file, fileName, fileSelectors) {
-  const inputs = findAllUsableFileInputs(fileSelectors);
+async function tryAttachOnBestInput(file, fileName, fileSelectors) {
+  if (isPromptAlreadyAttached(fileName)) {
+    return true;
+  }
 
-  for (const fileInput of inputs) {
-    if (await trySetFileAndConfirm(fileInput, file, fileName)) {
-      return true;
+  const fileInput = findBestFileInput(fileSelectors);
+  if (!fileInput) {
+    return false;
+  }
+
+  return trySetFileAndConfirm(fileInput, file, fileName);
+}
+
+function findBestFileInput(selectors) {
+  for (const selector of selectors) {
+    const node = queryFirstForAttach(selector);
+    if (node instanceof HTMLInputElement && node.type === 'file' && !node.disabled) {
+      return node;
     }
   }
 
-  return false;
+  return null;
 }
 
-async function openUploadMenuForProvider(attempt) {
+async function openUploadMenuForProvider(fileName) {
+  if (isPromptAlreadyAttached(fileName)) {
+    return;
+  }
+
   const host = location.hostname;
 
   if (host.includes('chatgpt.com') || host.includes('openai.com')) {
     clickElement(
-      queryFirst([
+      queryFirstForAttach([
         'button[data-testid="composer-plus-btn"]',
         'button[aria-label="Add files and more"]',
         'button.composer-btn[data-testid="composer-plus-btn"]',
       ]),
     );
-    await sleep(700);
+    await sleep(500);
     clickElement(
       findClickableByText([
         'add photos & files',
@@ -262,18 +360,16 @@ async function openUploadMenuForProvider(attempt) {
   }
 
   if (host.includes('gemini.google.com')) {
-    if (attempt === 0) {
-      const existingInput = queryFirst([
-        'images-files-uploader input[type="file"]',
-        'input[type="file"]',
-      ]);
-      if (existingInput) {
-        return;
-      }
+    const existingInput = findBestFileInput([
+      'images-files-uploader input[type="file"]',
+      ...(provider?.selectors?.fileInput ?? ['input[type="file"]']),
+    ]);
+    if (existingInput) {
+      return;
     }
 
     clickElement(
-      queryFirst([
+      queryFirstForAttach([
         'button[aria-label="Open upload file menu"]',
         'button.upload-card-button',
         'button[aria-label*="Upload" i]',
@@ -281,19 +377,22 @@ async function openUploadMenuForProvider(attempt) {
         '.leading-actions-wrapper button',
       ]),
     );
-    await sleep(700);
+    await sleep(500);
+
+    if (isPromptAlreadyAttached(fileName)) {
+      return;
+    }
 
     clickElement(
-      queryFirst(provider?.selectors?.attachMenuSelectors ?? []) ??
+      queryFirstForAttach(provider?.selectors?.attachMenuSelectors ?? []) ??
         findClickableByText(['files', 'upload file', 'add file']),
     );
-    await sleep(700);
     return;
   }
 
   if (host.includes('deepseek.com')) {
     clickElement(
-      queryFirst([
+      queryFirstForAttach([
         'div.ds-button.ds-button--iconLabelPrimary.ds-button--icon.ds-button--capsule[role="button"]',
         'div.ds-button.ds-button--icon.ds-button--capsule.ds-button--s[role="button"]',
         'input[type="file"] + div[role="button"]',
@@ -303,8 +402,13 @@ async function openUploadMenuForProvider(attempt) {
   }
 
   if (host.includes('perplexity.ai')) {
-    clickElement(queryFirst(provider?.selectors?.attachButton ?? []));
-    await sleep(700);
+    clickElement(queryFirstForAttach(provider?.selectors?.attachButton ?? []));
+    await sleep(500);
+
+    if (isPromptAlreadyAttached(fileName)) {
+      return;
+    }
+
     clickElement(
       findClickableByText([
         'upload files or images',
@@ -316,49 +420,39 @@ async function openUploadMenuForProvider(attempt) {
     return;
   }
 
-  clickElement(queryFirst(provider?.selectors?.attachButton ?? []));
-  await sleep(700);
+  clickElement(queryFirstForAttach(provider?.selectors?.attachButton ?? []));
+  await sleep(500);
+
+  if (isPromptAlreadyAttached(fileName)) {
+    return;
+  }
+
   clickElement(findClickableByText(provider?.selectors?.attachMenuText ?? ['upload', 'file']));
 }
 
-function findAllUsableFileInputs(selectors) {
-  const found = [];
-  const seen = new Set();
-  const roots = [document, ...collectSearchRoots(document).filter((root) => root !== document)];
-
-  for (const root of roots) {
-    for (const selector of selectors) {
-      const nodes = [...(root.querySelectorAll?.(selector) ?? [])];
-      for (const node of nodes) {
-        if (!(node instanceof HTMLInputElement) || node.type !== 'file' || node.disabled) {
-          continue;
-        }
-
-        if (seen.has(node)) {
-          continue;
-        }
-
-        seen.add(node);
-        found.push(node);
-      }
-    }
+async function trySetFileAndConfirm(fileInput, file, fileName) {
+  if (isPromptAlreadyAttached(fileName)) {
+    return true;
   }
 
-  return found;
-}
-
-async function trySetFileAndConfirm(fileInput, file, fileName) {
   if (!(await setFileOnInput(fileInput, file))) {
     return false;
   }
 
-  await sleep(1500);
+  const deadline = Date.now() + ATTACH_PREVIEW_TIMEOUT_MS;
+  while (Date.now() < deadline) {
+    if (isPromptAlreadyAttached(fileName)) {
+      return true;
+    }
 
-  if (fileInput.files?.length > 0) {
-    return true;
+    if (fileInput.files?.length > 0) {
+      return true;
+    }
+
+    await sleep(ATTACH_PREVIEW_POLL_MS);
   }
 
-  return hasUploadUiSignal(fileName);
+  return isPromptAlreadyAttached(fileName);
 }
 
 function hasUploadUiSignal(fileName) {
@@ -369,7 +463,11 @@ function hasUploadUiSignal(fileName) {
   const composerRoot =
     findPromptInput()?.closest(
       'form, [class*="composer"], [class*="input-area"], [class*="chat-input"], uploader-file-preview',
-    ) ?? document.body;
+    ) ?? null;
+
+  if (!composerRoot) {
+    return false;
+  }
 
   const text = (composerRoot.textContent ?? '').toLowerCase();
   const baseName = fileName.replace(/\.[^.]+$/, '').toLowerCase();
@@ -377,8 +475,7 @@ function hasUploadUiSignal(fileName) {
   return (
     text.includes('openbrowser-prompt') ||
     text.includes(baseName) ||
-    text.includes('.txt') ||
-    Boolean(queryFirst(['uploader-file-preview', 'gem-attachment', '.f3a54b52', '._76cd190']))
+    text.includes('.txt')
   );
 }
 
@@ -388,7 +485,6 @@ async function setFileOnInput(fileInput, file) {
     dataTransfer.items.add(file);
     fileInput.files = dataTransfer.files;
 
-    fileInput.dispatchEvent(new Event('focus', { bubbles: true }));
     fileInput.dispatchEvent(new Event('input', { bubbles: true }));
     fileInput.dispatchEvent(new Event('change', { bubbles: true }));
     fileInput.dispatchEvent(
@@ -398,8 +494,7 @@ async function setFileOnInput(fileInput, file) {
         dataTransfer,
       }),
     );
-    fileInput.dispatchEvent(new Event('blur', { bubbles: true }));
-    await sleep(1200);
+    await sleep(400);
     return fileInput.files?.length > 0;
   } catch {
     return false;
@@ -415,52 +510,52 @@ function hasAttachmentPreview(fileName) {
     '[data-testid="file-name"]',
   ];
 
-  if (queryFirst(previewSelectors)) {
+  if (queryFirstForAttach(previewSelectors)) {
     return true;
   }
 
-  const baseName = fileName.replace(/\.[^.]+$/, '').toLowerCase();
-  const roots = [document, ...collectSearchRoots(document).filter((root) => root !== document)];
+  const composerRoot =
+    findPromptInput()?.closest(
+      'form, [class*="composer"], [class*="input-area"], [class*="chat-input"], uploader-file-preview',
+    ) ?? null;
 
-  for (const root of roots) {
-    const textNodes = root.querySelectorAll?.(
-      '.gem-attachment-text, .f3a54b52, [data-testid="file-name"], .gem-attachment-extension-label',
-    ) ?? [];
-
-    for (const node of textNodes) {
-      const text = (node.textContent ?? '').trim().toLowerCase();
-      if (!text) {
-        continue;
-      }
-
-      if (
-        text.includes(baseName) ||
-        text.includes('txt') ||
-        text.includes('openbrowser-prompt') ||
-        text.includes('.txt')
-      ) {
-        return true;
-      }
-    }
+  if (!composerRoot) {
+    return false;
   }
 
-  return false;
+  const baseName = fileName.replace(/\.[^.]+$/, '').toLowerCase();
+  const previewNode = composerRoot.querySelector?.(
+    '.gem-attachment-text, .f3a54b52, [data-testid="file-name"], .gem-attachment-extension-label, gem-attachment, uploader-file-preview',
+  );
+
+  if (!previewNode) {
+    return false;
+  }
+
+  const text = (previewNode.textContent ?? '').trim().toLowerCase();
+  return (
+    text.includes(baseName) ||
+    text.includes('txt') ||
+    text.includes('openbrowser-prompt') ||
+    text.includes('.txt')
+  );
 }
 
-async function waitForAttachmentPreview(fileName) {
-  const deadline = Date.now() + 4_000;
+async function waitForAttachComplete(fileName) {
+  const deadline = Date.now() + ATTACH_PREVIEW_TIMEOUT_MS;
 
   while (Date.now() < deadline) {
-    if (hasAttachmentPreview(fileName)) {
+    if (isPromptAlreadyAttached(fileName)) {
       return true;
     }
-    await sleep(250);
+    await sleep(ATTACH_PREVIEW_POLL_MS);
   }
 
-  return hasAttachmentPreview(fileName);
+  return isPromptAlreadyAttached(fileName);
 }
 
-async function injectPrompt(message) {
+async function injectPrompt(message, options = {}) {
+  const preserveAttachments = options.preserveAttachments === true;
   const input = findPromptInput();
   if (!input) {
     throw new Error('Chat input not found. Reload the AI chat tab and try again.');
@@ -472,27 +567,36 @@ async function injectPrompt(message) {
   const method = provider?.inject ?? (input instanceof HTMLTextAreaElement ? 'textarea' : 'prose-mirror');
 
   if (method === 'textarea' || input instanceof HTMLTextAreaElement) {
-    await injectTextarea(input, message);
+    await injectTextarea(input, message, { preserveAttachments });
     return;
   }
 
   if (method === 'lexical' || input.getAttribute('data-lexical-editor') === 'true') {
-    await injectLexical(input, message);
+    await injectLexical(input, message, { preserveAttachments });
     return;
   }
 
   if (input.isContentEditable) {
-    await injectProseMirror(input, message);
+    await injectProseMirror(input, message, { preserveAttachments });
     return;
   }
 
   throw new Error('Unsupported chat input element.');
 }
 
-async function injectTextarea(element, text) {
+async function injectTextarea(element, text, options = {}) {
+  const preserveAttachments = options.preserveAttachments === true;
   element.focus();
-  clearComposer(element);
-  await sleep(50);
+  if (preserveAttachments && hasInjectedContent(element, text)) {
+    return;
+  }
+  if (!preserveAttachments) {
+    clearComposer(element);
+    await sleep(50);
+  } else {
+    moveCaretToEnd(element);
+    await sleep(50);
+  }
 
   const prototype = window.HTMLTextAreaElement.prototype;
   const descriptor = Object.getOwnPropertyDescriptor(prototype, 'value');
@@ -525,10 +629,19 @@ function dedupeInjectedTextarea(element, text) {
   }
 }
 
-async function injectLexical(element, text) {
+async function injectLexical(element, text, options = {}) {
+  const preserveAttachments = options.preserveAttachments === true;
   element.focus();
-  clearComposer(element);
-  await sleep(50);
+  if (preserveAttachments && hasInjectedContent(element, text)) {
+    return;
+  }
+  if (!preserveAttachments) {
+    clearComposer(element);
+    await sleep(50);
+  } else {
+    moveCaretToEnd(element);
+    await sleep(50);
+  }
 
   dispatchPaste(element, text);
   await sleep(100);
@@ -546,10 +659,19 @@ async function injectLexical(element, text) {
   dispatchInput(element);
 }
 
-async function injectProseMirror(element, text) {
+async function injectProseMirror(element, text, options = {}) {
+  const preserveAttachments = options.preserveAttachments === true;
   element.focus();
-  clearComposer(element);
-  await sleep(50);
+  if (preserveAttachments && hasInjectedContent(element, text)) {
+    return;
+  }
+  if (!preserveAttachments) {
+    clearComposer(element);
+    await sleep(50);
+  } else {
+    moveCaretToEnd(element);
+    await sleep(50);
+  }
 
   document.execCommand('insertText', false, text);
   await sleep(100);
@@ -601,6 +723,26 @@ function clearComposer(element) {
   element.focus();
   selectAll(element);
   document.execCommand('delete', false);
+}
+
+function moveCaretToEnd(element) {
+  element.focus();
+  if (element instanceof HTMLTextAreaElement || element instanceof HTMLInputElement) {
+    const length = element.value?.length ?? 0;
+    element.setSelectionRange(length, length);
+    return;
+  }
+
+  const selection = window.getSelection();
+  if (!selection) {
+    return;
+  }
+
+  const range = document.createRange();
+  range.selectNodeContents(element);
+  range.collapse(false);
+  selection.removeAllRanges();
+  selection.addRange(range);
 }
 
 function hasInjectedContent(element, text) {
@@ -658,19 +800,90 @@ function setNativeValue(element, value) {
   element.dispatchEvent(new Event('change', { bubbles: true }));
 }
 
+function canSubmitComposer(fileName) {
+  const input = findPromptInput();
+  if (input && hasComposerContent(input)) {
+    return true;
+  }
+
+  if (fileName && isPromptAlreadyAttached(fileName)) {
+    return true;
+  }
+
+  return false;
+}
+
+async function clickSendAfterFileAttach(fileName, composerMessage) {
+  // ChatGPT keeps send disabled while the file is still uploading.
+  await sleep(FILE_UPLOAD_SEND_WAIT_MS);
+
+  await injectPrompt(composerMessage, { preserveAttachments: true });
+  await sleep(300);
+
+  if (await trySubmitSend(fileName)) {
+    return;
+  }
+
+  await sleep(FILE_UPLOAD_SEND_RETRY_WAIT_MS);
+
+  await injectPrompt(composerMessage, { preserveAttachments: true });
+  await sleep(300);
+
+  if (await trySubmitSend(fileName)) {
+    return;
+  }
+
+  throw new Error('Send button did not submit after file upload.');
+}
+
+async function trySubmitSend(fileName) {
+  const input = findPromptInput();
+  input?.focus();
+  await sleep(100);
+
+  const button = findSendButton();
+  if (button) {
+    button.click();
+    if (await verifyMessageSubmitted()) {
+      return true;
+    }
+
+    clickElementWithPointerEvents(button);
+    if (await verifyMessageSubmitted()) {
+      return true;
+    }
+  }
+
+  if (input && canSubmitComposer(fileName)) {
+    await submitViaEnter(input);
+    if (await verifyMessageSubmitted()) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
 async function clickSendWhenReady() {
   for (let attempt = 0; attempt < SEND_MAX_RETRIES; attempt += 1) {
     const button = findSendButton();
     if (button && isSendButtonEnabled(button)) {
-      // Use a single submit action — button.click() plus dispatchEvent caused double sends.
       button.click();
-      return;
+      if (await verifyMessageSubmitted()) {
+        return;
+      }
+      clickElementWithPointerEvents(button);
+      if (await verifyMessageSubmitted()) {
+        return;
+      }
     }
 
     const input = findPromptInput();
     if (input && hasComposerContent(input) && attempt >= 2) {
       await submitViaEnter(input);
-      return;
+      if (await verifyMessageSubmitted()) {
+        return;
+      }
     }
 
     await sleep(SEND_RETRY_MS);
@@ -679,8 +892,83 @@ async function clickSendWhenReady() {
   throw new Error('Send button stayed disabled. The page did not accept the injected prompt.');
 }
 
+function clickElementWithPointerEvents(element) {
+  element.focus();
+  const rect = element.getBoundingClientRect();
+  if (rect.width <= 0 || rect.height <= 0) {
+    return;
+  }
+
+  const eventInit = {
+    bubbles: true,
+    cancelable: true,
+    view: window,
+    clientX: rect.left + rect.width / 2,
+    clientY: rect.top + rect.height / 2,
+  };
+
+  element.dispatchEvent(new PointerEvent('pointerdown', eventInit));
+  element.dispatchEvent(new MouseEvent('mousedown', eventInit));
+  element.dispatchEvent(new PointerEvent('pointerup', eventInit));
+  element.dispatchEvent(new MouseEvent('mouseup', eventInit));
+  element.dispatchEvent(new MouseEvent('click', eventInit));
+}
+
+async function verifyMessageSubmitted() {
+  await sleep(400);
+
+  if (findStopButton()) {
+    return true;
+  }
+
+  const input = findPromptInput();
+  if (input && !hasComposerContent(input)) {
+    return true;
+  }
+
+  const button = findSendButton();
+  if (button && !isSendButtonEnabled(button)) {
+    return true;
+  }
+
+  return false;
+}
+
+function findStopButton() {
+  if (!provider?.selectors?.stop) {
+    return null;
+  }
+
+  for (const selector of provider.selectors.stop) {
+    const node = document.querySelector(selector);
+    if (node && isElementVisible(node)) {
+      return node;
+    }
+  }
+
+  return null;
+}
+
+function isElementVisible(element) {
+  if (!element) {
+    return false;
+  }
+
+  const rect = element.getBoundingClientRect();
+  if (rect.width <= 0 || rect.height <= 0) {
+    return false;
+  }
+
+  const style = window.getComputedStyle(element);
+  return style.visibility !== 'hidden' && style.display !== 'none' && style.opacity !== '0';
+}
+
 function isSendButtonEnabled(button) {
   if (!button) {
+    return false;
+  }
+
+  if (!isElementVisible(button)) {
     return false;
   }
 
@@ -697,7 +985,7 @@ function isSendButtonEnabled(button) {
   }
 
   const style = window.getComputedStyle(button);
-  if (style.pointerEvents === 'none' || style.visibility === 'hidden' || style.display === 'none') {
+  if (style.pointerEvents === 'none') {
     return false;
   }
 
@@ -747,13 +1035,15 @@ function findSendButton() {
     }
   }
 
-  for (const button of candidates) {
+  const visible = candidates.filter((button) => isElementVisible(button));
+
+  for (const button of visible) {
     if (isSendButtonEnabled(button)) {
       return button;
     }
   }
 
-  return candidates[0] ?? null;
+  return visible[0] ?? candidates[0] ?? null;
 }
 
 async function waitForPlainResponse(beforeCount, mode, sessionId, options = {}) {
