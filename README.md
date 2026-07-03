@@ -12,9 +12,18 @@
   <img src="./src/assest/logo.png" alt="OpenBrowser" width="420" />
 </p>
 
+<p align="center">
+  <a href="https://github.com/1129Aliasgar/OpenBrowser/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="MIT License" /></a>
+  <a href="https://github.com/1129Aliasgar/OpenBrowser"><img src="https://img.shields.io/github/stars/1129Aliasgar/OpenBrowser?style=social" alt="GitHub stars" /></a>
+  <img src="https://img.shields.io/badge/node-%3E%3D20-brightgreen" alt="Node.js 20+" />
+  <img src="https://img.shields.io/badge/pnpm-11.x-orange" alt="pnpm 11" />
+</p>
+
 **Turn free browser AI chat into a local coding agent.**
 
-OpenBrowser is a local-first CLI that connects ChatGPT, Gemini, DeepSeek, Claude, Perplexity, GLM, Grok, and other browser-based AI assistants to your project workspace. Run commands in the terminal — prompts are **auto-sent to your AI tab** via the browser extension, responses flow back to the terminal automatically. No manual copy-paste.
+OpenBrowser is a local-first CLI that connects ChatGPT, Gemini, DeepSeek, Claude, Perplexity, GLM, Grok, and other browser-based AI assistants to your project workspace. Run commands in the terminal — prompts are **auto-sent to your AI tab** via the browser extension, responses flow back to the terminal automatically. No manual copy-paste. **No API keys required** — use your existing browser AI subscriptions.
+
+> **Star the repo** on [GitHub](https://github.com/1129Aliasgar/OpenBrowser) to support the project and help others discover it.
 
 ---
 
@@ -49,8 +58,8 @@ OpenBrowser is a local-first CLI that connects ChatGPT, Gemini, DeepSeek, Claude
 
 ```bash
 # 1. Clone and install
-git clone <your-repo-url> openbrowser
-cd openbrowser
+git clone https://github.com/1129Aliasgar/OpenBrowser.git
+cd OpenBrowser
 pnpm install
 
 # 2. Build the CLI
@@ -61,7 +70,7 @@ pnpm setup
 pnpm link --global
 
 # 4. Copy environment config
-copy .env.example .env
+cp .env.example .env        # Windows: copy .env.example .env
 
 # 5. Load the Chrome extension (see Browser Extension section)
 
@@ -105,7 +114,7 @@ pnpm install
 ### 2. Configure environment
 
 ```bash
-copy .env.example .env
+cp .env.example .env        # Windows: copy .env.example .env
 ```
 
 | Variable                      | Default      | Description                                                    |
@@ -394,9 +403,9 @@ pnpm test:watch    # Vitest in watch mode
 ### Project layout
 
 ```
-openbrowser/
-├── assest/               # Logo, banner, favicon (marketing assets)
+OpenBrowser/
 ├── src/
+│   ├── assest/           # Logo, banner, favicon
 │   ├── index.ts          # CLI entry point
 │   ├── server/           # Bridge server (Fastify + SSE)
 │   ├── context/          # Project context & @ attachments
@@ -408,6 +417,10 @@ openbrowser/
 ├── browser-extension/    # Chrome MV3 extension
 ├── dist/                 # Compiled output (after pnpm build)
 ├── .env.example
+├── CONTRIBUTING.md
+├── CODE_OF_CONDUCT.md
+├── SECURITY.md
+├── LICENSE
 ├── package.json
 └── pid.md                # Full product specification
 ```
@@ -483,6 +496,26 @@ For the full product specification, see [pid.md](./pid.md).
 
 ---
 
+## Contributing
+
+OpenBrowser is open source and welcomes contributions.
+
+1. Read [CONTRIBUTING.md](./CONTRIBUTING.md) for setup and PR guidelines.
+2. Follow the [Code of Conduct](./CODE_OF_CONDUCT.md).
+3. Report security issues privately — see [SECURITY.md](./SECURITY.md).
+
+**Quick start for contributors:**
+
+```bash
+git clone https://github.com/1129Aliasgar/OpenBrowser.git
+cd OpenBrowser
+pnpm install && pnpm build && pnpm test
+```
+
+Fork the repo, create a branch, and open a pull request on GitHub.
+
+---
+
 ## License
 
-MIT — open source. See [LICENSE](./LICENSE) when published.
+MIT © [1129Aliasgar](https://github.com/1129Aliasgar). See [LICENSE](./LICENSE).
