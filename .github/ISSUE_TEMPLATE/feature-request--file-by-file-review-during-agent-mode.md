@@ -2,7 +2,7 @@
 name: 'Feature Request: File-by-File Review During Agent Mode'
 about: Feature Implementation
 title: Feature
-labels: ''
+labels: 'enhancement'
 assignees: 1129Aliasgar
 
 ---
