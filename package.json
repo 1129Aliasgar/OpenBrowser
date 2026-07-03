@@ -1,7 +1,27 @@
 {
   "name": "openbrowser",
   "version": "0.1.0",
-  "description": "Local CLI agent that transforms browser-based AI chat platforms into coding assistants",
+  "description": "Free AI coding agent and harness — use ChatGPT, Claude, or Gemini via browser. No API key. Local CLI for free coding with your browser AI subscription.",
+  "keywords": [
+    "ai-agent",
+    "ai-tool",
+    "free-ai-tool",
+    "ai-harness",
+    "coding-agent",
+    "chatgpt",
+    "chatgpt-coding",
+    "claude",
+    "claude-coding",
+    "gemini",
+    "no-api-key",
+    "browser-extension",
+    "ai-subscription",
+    "free-coding",
+    "local-ai-agent",
+    "cli",
+    "llm",
+    "open-source"
+  ],
   "type": "module",
   "private": true,
   "bin": {

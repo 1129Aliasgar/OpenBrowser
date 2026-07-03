@@ -20,11 +20,54 @@
   <img src="https://img.shields.io/badge/pnpm-11.x-orange" alt="pnpm 11" />
 </p>
 
-**Turn free browser AI chat into a local coding agent.**
+**Turn free browser AI chat into a local coding agent — no API key, no extra AI subscription.**
 
-OpenBrowser is a local-first CLI that connects ChatGPT, Gemini, DeepSeek, Claude, Perplexity, GLM, Grok, and other browser-based AI assistants to your project workspace. Run commands in the terminal — prompts are **auto-sent to your AI tab** via the browser extension, responses flow back to the terminal automatically. No manual copy-paste. **No API keys required** — use your existing browser AI subscriptions.
+OpenBrowser is a **free AI tool** and **local AI agent harness** that connects ChatGPT, Gemini, DeepSeek, Claude, Perplexity, GLM, Grok, and other browser-based AI assistants to your project workspace. Run commands in the terminal — prompts are **auto-sent to your AI tab** via the browser extension, responses flow back to the terminal automatically. No manual copy-paste. **No API keys required** — use your existing **browser AI subscription** (including free plans).
 
 > **Star the repo** on [GitHub](https://github.com/1129Aliasgar/OpenBrowser) to support the project and help others discover it.
+
+---
+
+## What is OpenBrowser?
+
+OpenBrowser is an open-source **AI agent** for developers who want **ChatGPT for free coding**, **Claude for free coding**, or any browser AI plan — without paying for a separate API key or AI subscription. It acts as a **CLI harness** between your terminal and the AI chat tab you already use in Chrome.
+
+- **Free AI tool** — works with free browser tiers (ChatGPT, Claude, Gemini, and more)
+- **No API key** — your browser session is the connection; no OpenAI or Anthropic API billing
+- **AI coding agent** — ask questions, edit files with diff preview, attach `@file` / `@folder` context
+- **Local-first** — bridge runs on `127.0.0.1`; you approve every file change
+
+---
+
+## FAQ
+
+### Can ChatGPT be used for coding?
+
+Yes. ChatGPT is widely used for coding help, but the browser UI is not built for editing a whole project. OpenBrowser lets you use **ChatGPT for coding** from the terminal: send prompts from your repo, get answers in the terminal, and in **agent** mode apply multi-file changes with diff preview — still using your **ChatGPT browser subscription**, not an API key.
+
+### How to use ChatGPT for free coding?
+
+1. Open [ChatGPT](https://chatgpt.com) in Chrome (free or Plus plan).
+2. Install the OpenBrowser Chrome extension and run `openbrowser` in your project folder.
+3. Run `openbrowser ask "..."` for Q&A or `openbrowser agent "..."` for file edits.
+
+You get a **free AI coding workflow** as long as your browser plan allows chat — no separate API subscription.
+
+### How to use Claude for free coding?
+
+Same flow with [Claude](https://claude.ai): keep a Claude tab open, load the extension, run `openbrowser ask` or `openbrowser agent` from your project. OpenBrowser auto-sends prompts and returns responses to the terminal so you can use **Claude for free coding** (or on your existing Claude subscription) without an Anthropic API key.
+
+### Do I need an API key or paid AI subscription?
+
+No API key is required. OpenBrowser does not call OpenAI, Anthropic, or Google APIs directly — it bridges your **existing browser AI subscription**. If you already use ChatGPT, Claude, or Gemini in the browser (including free tiers), you can use them as your **AI agent** for local development.
+
+### Is OpenBrowser a free alternative to API-based coding agents?
+
+OpenBrowser is a **free, open-source AI tool** for developers who prefer browser AI over API billing. It is not a replacement for every feature of paid IDE agents, but it delivers ask mode, agent mode with diffs, and project context — powered by the **AI subscription you already have** in the browser.
+
+### What is an AI harness?
+
+In this project, an **AI harness** is the local bridge (CLI + extension) that wires browser chat to your workspace: queue prompts, inject them into the AI composer, capture replies, and apply file operations safely on your machine.
 
 ---
 
