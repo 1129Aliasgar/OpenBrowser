@@ -1,11 +1,12 @@
-<h1 style="display: flex; align-items: center;">
+<h1 style="display: flex; align-items: bottom;">
   <img
     src="./src/assest/favicon.png"
     width="32"
     style="margin-right: 8px;"
   />
-  <span style="color: #FFDAB9;">Open</span>
-  <span style="color: #FF8C00;">Browser</span>
+  <span>
+    <span style="color: #FFDAB9;">Open</span><span style="color: #FF8C00;">Browser</span>
+  </span>
 </h1>
 
 
