@@ -1,4 +1,0 @@
-allowBuilds:
-  esbuild: false
-overrides:
-  openbrowser: 'link:'

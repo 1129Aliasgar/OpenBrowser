@@ -1,0 +1,16 @@
+{
+  "name": "OpenBrowser",
+  "short_name": "OpenBrowser",
+  "description": "Open-Source Local AI Coding Agent & Harness",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#EE8B50",
+  "icons": [
+    {
+      "src": "/assets/favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml"
+    }
+  ]
+}

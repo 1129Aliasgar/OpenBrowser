@@ -1,7 +1,7 @@
 import type { SessionMode } from '../server/session-store.js';
 
-const DEFAULT_HOST = '127.0.0.1';
-const DEFAULT_PORT = Number(process.env.PORT ?? 5000);
+const DEFAULT_HOST = process.env.HOST ?? '127.0.0.1';
+const DEFAULT_PORT = Number(process.env.PORT ?? 3000);
 
 export interface SubmitPromptInput {
   mode: SessionMode;

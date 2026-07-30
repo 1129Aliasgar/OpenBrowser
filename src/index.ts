@@ -49,7 +49,7 @@ import {
 } from './shared/index.js';
 
 const program = new Command();
-const DEFAULT_PORT = Number(process.env.PORT ?? 5000);
+const DEFAULT_PORT = Number(process.env.PORT ?? 3000);
 
 const sessionPrimingState = {
   askPrimed: false,

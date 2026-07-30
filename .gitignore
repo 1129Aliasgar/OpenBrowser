@@ -1,8 +1,77 @@
-node_modules/
-dist/
-.env
-.openbrowser/
-*.log
+# See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
+
+# dependencies
+/node_modules
+/**/node_modules/
+/.pnp
+.pnp.js
+
+# testing
+/coverage
+/.vitest/
+
+# next.js
+/.next/
+/out/
+/**/.next/
+/**/out/
+
+# production
+/build
+/dist
+/**/dist/
+/**/build/
+
+# misc
 .DS_Store
-coverage/
-.vitest/
+*.pem
+
+# debug
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+*.log
+
+# local env files
+.env*.local
+.env
+.env.development.local
+.env.test.local
+.env.production.local
+.env.local
+
+# vercel
+.vercel
+
+# typescript
+*.tsbuildinfo
+next-env.d.ts
+
+# editor directories and files
+.idea
+.vscode/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# OS metadata
+.DS_Store
+.AppleDouble
+.LSOverride
+Icon?
+._*
+Thumbs.db
+Thumbs.db:encryptable
+ehthumbs.db
+ehthumbs_vista.db
+*.cab
+*.msi
+*.msm
+*.msp
+*.lnk
+
+# Project specific
+.openbrowser/

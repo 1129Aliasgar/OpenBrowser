@@ -35,7 +35,7 @@ import {
   updateSessionPartial,
 } from './session-store.js';
 
-const PORT = Number(process.env.PORT ?? 5000);
+const PORT = Number(process.env.PORT ?? 3000);
 
 interface ServerOptions {
   port?: number;
@@ -346,7 +346,7 @@ export async function createBridgeServer(): Promise<FastifyInstance> {
 export async function startServer(options: ServerOptions = {}): Promise<FastifyInstance> {
   const app = await createBridgeServer();
   const port = options.port ?? PORT;
-  const host = options.host ?? '127.0.0.1';
+  const host = options.host ?? (process.env.HOST ?? '0.0.0.0');
   await app.listen({ port, host });
   logger.info({ port, host }, 'Bridge server listening');
   return app;
