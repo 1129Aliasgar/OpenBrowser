@@ -52,7 +52,7 @@ export default function Navbar() {
 
         {/* Desktop Navigation Links */}
         <nav className="hidden md:flex items-center gap-7 text-sm font-medium text-muted-foreground">
-          <Link href="/features" className="hover:text-[#EE8B50] transition-colors">
+          <Link href="/features" prefetch={true} className="hover:text-[#EE8B50] transition-colors">
             Features
           </Link>
           <Link href="/how-it-works" className="hover:text-[#EE8B50] transition-colors">
@@ -67,7 +67,7 @@ export default function Navbar() {
               7 Active
             </span>
           </Link>
-          <Link href="/docs/getting-started" className="hover:text-[#EE8B50] transition-colors">
+          <Link href="/docs/getting-started" prefetch={true} className="hover:text-[#EE8B50] transition-colors">
             Docs
           </Link>
           <Link href="/faq" className="hover:text-[#EE8B50] transition-colors">
@@ -91,7 +91,7 @@ export default function Navbar() {
             </span>
           </a>
 
-          <Link href="/docs/getting-started">
+          <Link href="/docs/getting-started" prefetch={true}>
             <button className="flex items-center gap-1.5 px-4 py-2 text-xs font-bold rounded-full bg-[#EE8B50] hover:bg-[#D9773F] text-foreground shadow-[0_0_20px_rgba(238,139,80,0.3)] transition-all hover:scale-105">
               <Sparkles className="w-3.5 h-3.5" />
               <span>Get Started</span>

@@ -1,5 +1,6 @@
 import { CheckCircle2, ArrowRight, Terminal, Globe, Cpu, Sparkles } from "lucide-react";
-import InteractiveTerminal from "@/components/interactive-terminal";
+import dynamic from "next/dynamic";
+const InteractiveTerminal = dynamic(() => import("@/components/interactive-terminal"));
 import BridgeArchitecture from "@/components/bridge-architecture";
 import CTABanner from "@/components/cta-banner";
 

@@ -127,6 +127,7 @@ export default function NotFound() {
               <Link
                 key={idx}
                 href={hrefs[item]}
+                prefetch={true}
                 className="rounded-full px-4 py-2 text-sm font-medium text-foreground border transition-all duration-300 hover:bg-[#EE8B50] hover:text-foreground hover:border-[#EE8B50]"
                 style={{
                   backgroundColor: "rgba(255,255,255,0.05)",

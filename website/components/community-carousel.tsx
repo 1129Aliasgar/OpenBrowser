@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { motion, AnimatePresence } from "framer-motion";
+import { m, LazyMotion, domAnimation, AnimatePresence } from "framer-motion";
 import { Star, ChevronLeft, ChevronRight, Quote, Github, UserCheck } from "lucide-react";
 
 export default function CommunityCarousel() {
@@ -87,14 +87,15 @@ export default function CommunityCarousel() {
             <Quote className="w-10 h-10 text-[#EE8B50]/20 absolute top-6 left-6 pointer-events-none" />
 
             <AnimatePresence mode="wait">
-              <motion.div
-                key={currentIndex}
-                initial={{ opacity: 0, x: 20 }}
-                animate={{ opacity: 1, x: 0 }}
-                exit={{ opacity: 0, x: -20 }}
-                transition={{ duration: 0.4 }}
-                className="space-y-6 relative z-10"
-              >
+              <LazyMotion features={domAnimation}>
+                <m.div
+                  key={currentIndex}
+                  initial={{ opacity: 0, x: 20 }}
+                  animate={{ opacity: 1, x: 0 }}
+                  exit={{ opacity: 0, x: -20 }}
+                  transition={{ duration: 0.4 }}
+                  className="space-y-6 relative z-10"
+                >
                 <div className="flex items-center gap-1">
                   {[...Array(reviews[currentIndex].rating)].map((_, i) => (
                     <Star key={i} className="w-4 h-4 fill-[#EE8B50] text-[#EE8B50]" />
@@ -116,7 +117,8 @@ export default function CommunityCarousel() {
                     </div>
                   </div>
                 </div>
-              </motion.div>
+                </m.div>
+              </LazyMotion>
             </AnimatePresence>
 
             {/* Controls */}

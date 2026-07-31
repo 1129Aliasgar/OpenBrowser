@@ -22,7 +22,7 @@ export default function Hero() {
         <div className="flex justify-center transition-all duration-500 ease-in-out opacity-100 translate-y-0">
           <div className="inline-flex items-center gap-2.5 px-4 py-1.5 rounded-full bg-card border border-border shadow-xl backdrop-blur-md">
             <div className="w-5 h-5 flex items-center justify-center">
-              <Image src="/assets/favicon.svg" alt="OpenBrowser" width={20} height={20} className="w-full h-full object-contain" />
+              <Image src="/assets/favicon.svg" alt="OpenBrowser" width={20} height={20} className="w-full h-full object-contain" priority />
             </div>
             <span className="text-xs font-semibold uppercase tracking-wider text-[#EE8B50] font-mono">
               Open Source • Local First • No API Keys

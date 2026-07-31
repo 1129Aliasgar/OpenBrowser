@@ -24,7 +24,7 @@ export default function CTABanner() {
           </p>
 
           <div className="flex flex-wrap items-center justify-center gap-4 pt-2">
-            <Link href="/docs/getting-started">
+            <Link href="/docs/getting-started" prefetch={true}>
               <Button size="lg" className="bg-gradient-to-r from-[#FF8C00] to-[#E65100] hover:from-[#FF9E2C] hover:to-[#FF6B00] text-white font-bold text-base px-8 h-12 shadow-[0_0_25px_rgba(255,140,0,0.35)] gap-2 border-none">
                 <Terminal className="w-4 h-4" />
                 <span>Read Installation Guide</span>
