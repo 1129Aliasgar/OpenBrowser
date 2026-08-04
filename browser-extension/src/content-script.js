@@ -14,8 +14,13 @@ const FINISH_RECHECK_MS = 600;
 let running = false;
 const processedSessionIds = new Set();
 const jobQueue = [];
+let apiCapture = null;
 
 const provider = getProviderForHost(location.hostname);
+const isChatGpt = provider?.name === 'ChatGPT';
+const isGemini = provider?.name === 'Gemini';
+const isDeepSeek = provider?.name === 'DeepSeek';
+const usesApiCapture = isChatGpt || isGemini || isDeepSeek;
 
 void registerWithBackground();
 
@@ -42,6 +47,138 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
   return false;
 });
+
+const API_CAPTURE_SOURCES = [
+  'openbrowser-chatgpt-api',
+  'openbrowser-gemini-api',
+  'openbrowser-deepseek-api',
+];
+
+window.addEventListener('message', (event) => {
+  if (event.source !== window) {
+    return;
+  }
+  const data = event.data;
+  if (!data || !API_CAPTURE_SOURCES.includes(data.source)) {
+    return;
+  }
+  handleApiCaptureMessage(data);
+});
+
+function beginApiCapture(mode, sessionId) {
+  if (apiCapture?.timer) {
+    clearTimeout(apiCapture.timer);
+  }
+  apiCapture = {
+    mode,
+    sessionId,
+    candidates: new Map(),
+    startedAt: Date.now(),
+    resolve: null,
+    reject: null,
+    timer: null,
+    lastChunkText: '',
+    lastChunkAt: 0,
+  };
+}
+
+function endApiCapture() {
+  if (apiCapture?.timer) {
+    clearTimeout(apiCapture.timer);
+  }
+  apiCapture = null;
+}
+
+function waitForApiCapturedResponse() {
+  return new Promise((resolve, reject) => {
+    if (!apiCapture) {
+      reject(new Error('AI API capture was not started.'));
+      return;
+    }
+    apiCapture.resolve = resolve;
+    apiCapture.reject = reject;
+    apiCapture.timer = setTimeout(() => {
+      const capture = apiCapture;
+      apiCapture = null;
+      if (capture) {
+        reject(new Error('Timed out waiting for the AI provider API response.'));
+      }
+    }, RESPONSE_TIMEOUT_MS);
+  });
+}
+
+function bestApiCaptureText() {
+  let best = '';
+  for (const candidate of apiCapture.candidates.values()) {
+    if (candidate.text.length > best.length) {
+      best = candidate.text;
+    }
+  }
+  return best;
+}
+
+function postBestApiChunk() {
+  if (apiCapture.mode !== 'ask') {
+    return;
+  }
+  const text = bestApiCaptureText();
+  if (!text || text === apiCapture.lastChunkText) {
+    return;
+  }
+  if (
+    text.length - apiCapture.lastChunkText.length >= CHUNK_MIN_CHARS ||
+    Date.now() - apiCapture.lastChunkAt >= CHUNK_MIN_MS
+  ) {
+    apiCapture.lastChunkText = text;
+    apiCapture.lastChunkAt = Date.now();
+    void postBrowserChunk({ sessionId: apiCapture.sessionId, text });
+  }
+}
+
+function handleApiCaptureMessage(data) {
+  if (!apiCapture) {
+    return;
+  }
+
+  if (data.type === 'capture-begin') {
+    if ((data.at ?? 0) >= apiCapture.startedAt && !apiCapture.candidates.has(data.captureId)) {
+      apiCapture.candidates.set(data.captureId, { text: '', done: false });
+    }
+    return;
+  }
+
+  const candidate = apiCapture.candidates.get(data.captureId);
+  if (!candidate) {
+    return;
+  }
+
+  if (data.type === 'capture-chunk') {
+    if (typeof data.text === 'string' && data.text.length > candidate.text.length) {
+      candidate.text = data.text;
+    }
+    postBestApiChunk();
+    return;
+  }
+
+  if (data.type === 'capture-done') {
+    if (typeof data.text === 'string' && data.text.length > candidate.text.length) {
+      candidate.text = data.text;
+    }
+    if (candidate.text) {
+      const { resolve } = apiCapture;
+      const text = candidate.text;
+      endApiCapture();
+      resolve?.(text);
+      return;
+    }
+    apiCapture.candidates.delete(data.captureId);
+    return;
+  }
+
+  if (data.type === 'capture-error') {
+    apiCapture.candidates.delete(data.captureId);
+  }
+}
 
 async function handleIncomingJob(job) {
   if (!job?.sessionId || processedSessionIds.has(job.sessionId)) {
@@ -149,6 +286,10 @@ async function processJob(job) {
   const beforeCount = countAssistantMessages();
   const threadIsEmpty = beforeCount === 0;
 
+  if (usesApiCapture) {
+    beginApiCapture(job.mode, job.sessionId);
+  }
+
   if (job.delivery === 'file') {
     const composerMessage = job.composerMessage ?? job.message;
     const attached = await attachPromptFile(job);
@@ -174,9 +315,11 @@ async function processJob(job) {
     await clickSendWhenReady();
   }
 
-  const text = await waitForPlainResponse(beforeCount, job.mode, job.sessionId, {
-    markdownDraft: job.markdownDraft,
-  });
+  const text = usesApiCapture
+    ? await waitForApiCapturedResponse()
+    : await waitForPlainResponse(beforeCount, job.mode, job.sessionId, {
+        markdownDraft: job.markdownDraft,
+      });
   if (job.mode === 'ask' && job.sessionId) {
     await postBrowserChunk({ sessionId: job.sessionId, text });
   }

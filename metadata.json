@@ -1,6 +1,0 @@
-{
-  "name": "OpenBrowser",
-  "description": "Free AI coding agent and harness — use ChatGPT, Claude, or Gemini via browser",
-  "requestFramePermissions": [],
-  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
-}

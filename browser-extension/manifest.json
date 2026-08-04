@@ -45,6 +45,24 @@
       ],
       "js": ["src/providers.js", "src/content-script.js"],
       "run_at": "document_idle"
+    },
+    {
+      "matches": ["https://chatgpt.com/*", "https://chat.openai.com/*"],
+      "js": ["src/chatgpt-api.js"],
+      "run_at": "document_start",
+      "world": "MAIN"
+    },
+    {
+      "matches": ["https://gemini.google.com/*"],
+      "js": ["src/gemini-api.js"],
+      "run_at": "document_start",
+      "world": "MAIN"
+    },
+    {
+      "matches": ["https://chat.deepseek.com/*"],
+      "js": ["src/deepseek-api.js"],
+      "run_at": "document_start",
+      "world": "MAIN"
     }
   ],
   "action": {
