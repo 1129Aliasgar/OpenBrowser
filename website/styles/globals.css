@@ -1,0 +1,182 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: #FFFFFF;
+    --foreground: #111827;
+    --card: #FFFFFF;
+    --card-foreground: #111827;
+    --popover: #FFFFFF;
+    --popover-foreground: #111827;
+    --surface: #F8F9FB;
+    --surface-elevated: #FFFFFF;
+    --primary: #111827;
+    --primary-foreground: #F9FAFB;
+    --secondary: #F3F4F6;
+    --secondary-foreground: #4B5563;
+    --muted: #F3F4F6;
+    --muted-foreground: #6B7280;
+    --accent: #EE8B50;
+    --accent-foreground: #FFFFFF;
+    --destructive: 0 84.2% 60.2%;
+    --destructive-foreground: #F8FAFC;
+    --border: #E5E7EB;
+    --input: #E5E7EB;
+    --ring: #EE8B50;
+    --radius: 0.75rem;
+    --terminal-bg: #0A0C10;
+    --terminal-border: #181D2A;
+    --terminal-text: #F9FAFB;
+    --terminal-muted: #9CA3AF;
+    --terminal-heading: #FFFFFF;
+    --terminal-orange: #EE8B50;
+    --code-bg: #06080C;
+    --code-heading: #FFFFFF;
+    --code-text: #E5E7EB;
+    --cta-bg: #0B0B0F;
+    --cta-heading: #FFFFFF;
+    --cta-text: #B8BDC7;
+    --cta-border: #262A33;
+  }
+  
+  .dark {
+    --background: #0B0B0F;
+    --foreground: #FFFFFF;
+    --card: #111217;
+    --card-foreground: #FFFFFF;
+    --popover: #111217;
+    --popover-foreground: #FFFFFF;
+    --surface: #111217;
+    --surface-elevated: #181A20;
+    --primary: #FFFFFF;
+    --primary-foreground: #0B0B0F;
+    --secondary: #181A20;
+    --secondary-foreground: #B8BDC7;
+    --muted: #181A20;
+    --muted-foreground: #7A808A;
+    --accent: #EE8B50;
+    --accent-foreground: #FFFFFF;
+    --destructive: 0 62.8% 30.6%;
+    --destructive-foreground: #F8FAFC;
+    --border: #262A33;
+    --input: #262A33;
+    --ring: #EE8B50;
+    --terminal-bg: #0A0C10;
+    --terminal-border: #181D2A;
+    --terminal-text: #F9FAFB;
+    --terminal-muted: #9CA3AF;
+    --terminal-heading: #FFFFFF;
+    --terminal-orange: #EE8B50;
+    --code-bg: #06080C;
+    --code-heading: #FFFFFF;
+    --code-text: #E5E7EB;
+    --cta-bg: #0B0B0F;
+    --cta-heading: #FFFFFF;
+    --cta-text: #B8BDC7;
+    --cta-border: #262A33;
+  }
+}
+
+@layer base {
+  * {
+    border-color: var(--border);
+  }
+  body {
+    background-color: var(--background);
+    color: var(--foreground);
+    font-feature-settings: "rlig" 1, "calt" 1;
+    overflow-x: hidden;
+    transition: background-color 0.25s ease, color 0.25s ease, border-color 0.25s ease;
+  }
+  h1, h2, h3, h4, h5, h6 {
+    font-family: var(--font-space-grotesk), "Space Grotesk", sans-serif;
+  }
+}
+
+/* Custom Scrollbars */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-track {
+  background: #0B0B0F;
+}
+::-webkit-scrollbar-thumb {
+  background: #181A20;
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #262A33;
+}
+
+/* Custom Glow Effects */
+.glow-orange {
+  box-shadow: 0 0 35px -5px rgba(238, 139, 80, 0.35);
+}
+
+.glow-orange-sm {
+  box-shadow: 0 0 18px -3px rgba(238, 139, 80, 0.25);
+}
+
+.bg-radial-glow {
+  background: radial-gradient(circle at 50% 0%, rgba(238, 139, 80, 0.18) 0%, rgba(238, 139, 80, 0.04) 45%, transparent 70%);
+}
+
+.text-gradient-orange {
+  background: linear-gradient(135deg, #F8B38A 0%, #EE8B50 60%, #D9773F 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+.text-gradient-silver {
+  background: linear-gradient(180deg, #FFFFFF 0%, #B8BDC7 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+.border-glow-hover {
+  transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+}
+.border-glow-hover:hover {
+  border-color: rgba(238, 139, 80, 0.45);
+  box-shadow: 0 0 25px -5px rgba(238, 139, 80, 0.25);
+}
+
+@keyframes marquee {
+  0% { transform: translateX(0%); }
+  100% { transform: translateX(-50%); }
+}
+
+@keyframes marqueeReverse {
+  0% { transform: translateX(-50%); }
+  100% { transform: translateX(0%); }
+}
+
+.animate-marquee-slow {
+  display: flex;
+  width: max-content;
+  animation: marquee 40s linear infinite;
+}
+
+.animate-marquee-slow:hover {
+  animation-play-state: paused;
+}
+
+/* MDX Dual Theme Support */
+html .prose pre {
+  background-color: var(--shiki-light-bg) !important;
+  color: var(--shiki-light) !important;
+}
+html .prose pre span {
+  color: var(--shiki-light);
+}
+
+html.dark .prose pre {
+  background-color: var(--shiki-dark-bg) !important;
+  color: var(--shiki-dark) !important;
+}
+html.dark .prose pre span {
+  color: var(--shiki-dark);
+}
